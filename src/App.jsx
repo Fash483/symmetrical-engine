@@ -86,8 +86,6 @@ const AUTH = {
 s = UserSecretsClient()
 B2_KEY_ID = s.get_secret("B2_KEY_ID")
 B2_APPLICATION_KEY = s.get_secret("B2_APPLICATION_KEY")`,
-  colab: `B2_KEY_ID = "PUT_KEY_ID_HERE"
-B2_APPLICATION_KEY = "PUT_APPLICATION_KEY_HERE"`,
 };
 
 const DEF = {
@@ -176,14 +174,22 @@ export default function App() {
   const chosen = (ticked.length ? ticked : visible).slice().sort((a, b) => nat(a.dir + a.name, b.dir + b.name));
   const pre = s.prefix.replace(/^\/+|\/+$/g, "");
   const keys = chosen.map((i) => { const p = (i.dir + i.name).replace(/^\/+/, ""); return pre ? pre + "/" + p : p; });
-  const code = TPL
-    .replace("@AUTH@", () => AUTH[s.target])
+
+  const isColab = s.target === "colab";
+  const script = isColab ? "" : TPL
+    .replace("@AUTH@", () => AUTH.kaggle)
     .replace("@REGION@", () => s.region)
     .replace("@BUCKET@", () => s.bucket)
-    .replace("@LOCAL@", () => (s.target === "kaggle" ? "/kaggle/working/" : "/content/"))
+    .replace("@LOCAL@", () => "/kaggle/working/")
     .replace("@ITEMS@", () => JSON.stringify(keys, null, 4))
     .replace("@PART@", () => String(s.part))
     .replace("@KW@", () => JSON.stringify(parseKw(s.fileKw)));
+  const list = [
+    "# " + chosen.length + " item(s)",
+    ...chosen.map((i) => "# - " + i.name),
+    ...chosen.map((i) => i.name + " | " + i.dir),
+  ].join("\n");
+  const code = isColab ? list : script;
 
   const toggle = (it, v) => setItems((a) => a.map((x) => (x === it ? { ...x, checked: v } : x)));
   const toggleGroup = (g, v) => setItems((a) => a.map((x) => (g.items.includes(x) ? { ...x, checked: v } : x)));
@@ -244,24 +250,30 @@ export default function App() {
       </section>
 
       <section>
-        <h2>3. Script</h2>
+        <h2>{isColab ? "3. List" : "3. Script"}</h2>
         <div className="row">
           <select value={s.target} onChange={(e) => set({ target: e.target.value })}>
-            <option value="kaggle">Kaggle (secrets)</option><option value="colab">Colab (type keys in)</option>
+            <option value="kaggle">Kaggle (secrets)</option><option value="colab">Colab (name | directory list)</option>
           </select>
-          <select value={s.part} onChange={(e) => set({ part: Number(e.target.value) })}>
-            <option value={0}>Whole run</option><option value={1}>Part 1 of 2</option><option value={2}>Part 2 of 2</option>
-          </select>
+          {!isColab && (
+            <select value={s.part} onChange={(e) => set({ part: Number(e.target.value) })}>
+              <option value={0}>Whole run</option><option value={1}>Part 1 of 2</option><option value={2}>Part 2 of 2</option>
+            </select>
+          )}
         </div>
-        <input value={s.fileKw} onChange={(e) => set({ fileKw: e.target.value })} placeholder="Optional: filter file names inside folders (S01)" />
-        <details>
-          <summary>B2 settings</summary>
-          <input value={s.bucket} onChange={(e) => set({ bucket: e.target.value })} placeholder="Bucket" />
-          <input value={s.region} onChange={(e) => set({ region: e.target.value })} placeholder="Region e.g. us-east-005" />
-          <input value={s.prefix} onChange={(e) => set({ prefix: e.target.value })} placeholder="Key prefix (optional)" />
-        </details>
+        {!isColab && (
+          <input value={s.fileKw} onChange={(e) => set({ fileKw: e.target.value })} placeholder="Optional: filter file names inside folders (S01)" />
+        )}
+        {!isColab && (
+          <details>
+            <summary>B2 settings</summary>
+            <input value={s.bucket} onChange={(e) => set({ bucket: e.target.value })} placeholder="Bucket" />
+            <input value={s.region} onChange={(e) => set({ region: e.target.value })} placeholder="Region e.g. us-east-005" />
+            <input value={s.prefix} onChange={(e) => set({ prefix: e.target.value })} placeholder="Key prefix (optional)" />
+          </details>
+        )}
         <textarea readOnly value={code} style={{ minHeight: 220 }} />
-        <button className="go" onClick={copy}>{copied ? "✔ Copied!" : "Copy script"}</button>
+        <button className="go" onClick={copy}>{copied ? "✔ Copied!" : isColab ? "Copy list" : "Copy script"}</button>
       </section>
     </div>
   );
