@@ -54,10 +54,18 @@ export interface Cell {
   ids: string[]
 }
 
-export const TAG: Record<Kind, string> = { zip: 'ZIP', movie: 'MOV', series: 'SER', other: 'OTH' }
+export const TAG: Record<Kind, string> = {
+  zip: 'ZIP',
+  movie: 'MOV',
+  series: 'SER',
+  other: 'OTH',
+}
 const ORDER: Kind[] = ['zip', 'movie', 'series', 'other']
 const MIN_EPS = 3 // a season needs MORE than this many episodes to get its own group
-export const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+export const collator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: 'base',
+})
 
 // ---------- parsing ----------
 
@@ -68,6 +76,7 @@ const HAS_EXT = /\.[A-Za-z0-9]{2,5}$/
 
 const cleanName = (s: string) =>
   String(s || '')
+    // eslint-disable-next-line no-control-regex -- control characters are invalid in file names
     .replace(/[\\/\0-\x1f]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
@@ -117,7 +126,7 @@ export const fileNameFor = (url: string, given: string, n: number) => {
     const h = cleanName(safeDecode(u.hash.replace(/^#/, '')))
     if (HAS_EXT.test(h)) fromHash = h
   } catch {
-    path = ''
+    /* not a parseable URL: fall back to the given name or download_N */
   }
   const g = cleanName(given)
   const pick =
@@ -143,7 +152,7 @@ export const parseLinks = (input: string): LinkItem[] => {
     const failed = /<--/.test(tail)
     hits.forEach((h, k) => {
       const url = h[0].replace(/[),;\]]+$/, '')
-      let hasQuery = false
+      let hasQuery: boolean
       try {
         hasQuery = new URL(url).search.length > 1
       } catch {
@@ -166,15 +175,19 @@ export const parseLinks = (input: string): LinkItem[] => {
 
 // ---------- classification ----------
 
-const VID = /\.(mkv|mp4|avi|mov|m4v|wmv|ts|m2ts|mpg|mpeg|webm|flv|divx|vob)(?=$|\s)/i
-const NONVID = /\.(nfo|srt|sub|idx|ass|txt|jpg|jpeg|png|gif|pdf|epub|mp3|flac|iso)$/i
+const VID =
+  /\.(mkv|mp4|avi|mov|m4v|wmv|ts|m2ts|mpg|mpeg|webm|flv|divx|vob)(?=$|\s)/i
+const NONVID =
+  /\.(nfo|srt|sub|idx|ass|txt|jpg|jpeg|png|gif|pdf|epub|mp3|flac|iso)$/i
 const SERIES_RE = /^(.*?)[ ._-]+(S\d{1,2})[ ._-]?E\d{1,3}/i
 const SERIES_ALT = /^(.*?)[ ._-]+(\d{1,2})x\d{2,3}(?![\dp])/i
 const norm = (s: string) => s.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim()
 const seasonKey = (show: string, s: string) =>
   `${norm(show)} S${String(parseInt(s, 10)).padStart(2, '0')}`.trim()
 
-export const classify = (name: string): Pick<LinkItem, 'type' | 'disp' | 'sk' | 'bk'> => {
+export const classify = (
+  name: string,
+): Pick<LinkItem, 'type' | 'disp' | 'sk' | 'bk'> => {
   const n = name.trim()
   let m: RegExpMatchArray | null
   if ((m = n.match(/^(.*?)[ ._-]*part[ ._-]?0*\d+\.(zip|rar|7z)$/i)))
@@ -189,7 +202,11 @@ export const classify = (name: string): Pick<LinkItem, 'type' | 'disp' | 'sk' | 
   const isVid = VID.test(n)
   if (!NONVID.test(n)) {
     if ((m = n.match(SERIES_RE)))
-      return { type: 'series', disp: 'Loose series', sk: seasonKey(m[1], m[2].slice(1)) }
+      return {
+        type: 'series',
+        disp: 'Loose series',
+        sk: seasonKey(m[1], m[2].slice(1)),
+      }
     if (isVid && (m = n.match(SERIES_ALT)))
       return { type: 'series', disp: 'Loose series', sk: seasonKey(m[1], m[2]) }
   }
@@ -223,29 +240,42 @@ export const buildGroups = (items: LinkItem[]): Group[] => {
   const sCount = new Map<string, number>()
   const bCount = new Map<string, number>()
   items.forEach((f) => {
-    if (f.sk) sCount.set(f.sk.toLowerCase(), (sCount.get(f.sk.toLowerCase()) || 0) + 1)
-    if (f.bk) bCount.set(f.bk.toLowerCase(), (bCount.get(f.bk.toLowerCase()) || 0) + 1)
+    if (f.sk)
+      sCount.set(f.sk.toLowerCase(), (sCount.get(f.sk.toLowerCase()) || 0) + 1)
+    if (f.bk)
+      bCount.set(f.bk.toLowerCase(), (bCount.get(f.bk.toLowerCase()) || 0) + 1)
   })
   const map = new Map<string, Group>()
   items.forEach((f) => {
     let label = f.disp
     if (f.sk && (sCount.get(f.sk.toLowerCase()) || 0) > MIN_EPS) label = f.sk
-    else if (f.bk && f.bk.length > 2 && (bCount.get(f.bk.toLowerCase()) || 0) > 1) label = f.bk
+    else if (
+      f.bk &&
+      f.bk.length > 2 &&
+      (bCount.get(f.bk.toLowerCase()) || 0) > 1
+    )
+      label = f.bk
     f.loose = f.type === 'series' && label === f.disp
     const key = f.type + '|' + label.toLowerCase()
     if (!map.has(key)) map.set(key, { type: f.type, label, members: [] })
     map.get(key)!.members.push(f)
   })
-  return [...map.values()].sort((a, b) => ORDER.indexOf(a.type) - ORDER.indexOf(b.type))
+  return [...map.values()].sort(
+    (a, b) => ORDER.indexOf(a.type) - ORDER.indexOf(b.type),
+  )
 }
 
 // ---------- command templates ----------
 
 // shell double-quote
-export const dq = (s: string) => '"' + String(s).replace(/(["\\$`])/g, '\\$1') + '"'
+export const dq = (s: string) =>
+  '"' + String(s).replace(/(["\\$`])/g, '\\$1') + '"'
 
 // One file. No query string -> let the server name it. Query string -> force the real name.
-export const wgetOne = (f: Pick<LinkItem, 'url' | 'hasQuery'>, fileName: string) =>
+export const wgetOne = (
+  f: Pick<LinkItem, 'url' | 'hasQuery'>,
+  fileName: string,
+) =>
   f.hasQuery
     ? `! wget -O ${dq(fileName)} ${dq(f.url)}`
     : `! wget --content-disposition ${dq(f.url)}`
@@ -317,7 +347,11 @@ with rarfile.RarFile(temp_rar_path) as rf:
 os.remove(temp_rar_path)
 print("Temporary RAR file removed.")`
 
-const pyMany = (urls: string[], kind: 'zip' | 'rar', workers: number) => `${kind === 'rar' ? '! pip install rarfile\n' : ''}import os
+const pyMany = (
+  urls: string[],
+  kind: 'zip' | 'rar',
+  workers: number,
+) => `${kind === 'rar' ? '! pip install rarfile\n' : ''}import os
 import tempfile
 import requests
 ${kind === 'rar' ? 'import rarfile' : 'import zipfile'}
@@ -430,14 +464,27 @@ export const cmdKind = (f: LinkItem) =>
 // ---------- cells ----------
 
 // Turn a set of links into one or more Colab cells.
-export const fmt = (members: LinkItem[], s: Settings, pos: Map<string, number>): Cell[] => {
+export const fmt = (
+  members: LinkItem[],
+  s: Settings,
+  pos: Map<string, number>,
+): Cell[] => {
   const line = (f: LinkItem) =>
     s.names ? `${pos.get(f.id) ?? ''}. ${f.name}\n${f.url}\n` : f.url
   const cm = (ns: string[]) =>
-    s.comments ? ns.map((n) => '# ' + n.replace(/\s+/g, ' ').trim()).join('\n') + '\n' : ''
+    s.comments
+      ? ns.map((n) => '# ' + n.replace(/\s+/g, ' ').trim()).join('\n') + '\n'
+      : ''
 
   if (!s.commands) {
-    return [{ label: `${members.length} link(s)`, text: members.map(line).join('\n'), kind: 'plain', ids: members.map((f) => f.id) }]
+    return [
+      {
+        label: `${members.length} link(s)`,
+        text: members.map(line).join('\n'),
+        kind: 'plain',
+        ids: members.map((f) => f.id),
+      },
+    ]
   }
 
   const cells: Cell[] = []
@@ -467,42 +514,83 @@ export const fmt = (members: LinkItem[], s: Settings, pos: Map<string, number>):
   })
 
   if (multi.size) {
-    const sets = [...multi.entries()].sort((a, b) => collator.compare(a[0], b[0])).map(([, v]) => v)
-    sets.forEach((v) => v.parts.sort((a, b) => collator.compare(a.name, b.name)))
+    const sets = [...multi.entries()]
+      .sort((a, b) => collator.compare(a[0], b[0]))
+      .map(([, v]) => v)
+    sets.forEach((v) =>
+      v.parts.sort((a, b) => collator.compare(a.name, b.name)),
+    )
     cells.push({
       label: `${sets.length} split archive set(s)`,
       kind: 'split',
-      text: cm(sets.map((v) => v.base)) + pyMulti(sets.map((v) => v.parts.map((p) => p.url)), s.workers),
+      text:
+        cm(sets.map((v) => v.base)) +
+        pyMulti(
+          sets.map((v) => v.parts.map((p) => p.url)),
+          s.workers,
+        ),
       ids: sets.flatMap((v) => v.parts.map((p) => p.id)),
     })
   }
   if (zips.length === 1)
-    cells.push({ label: zips[0].name, kind: 'zip', text: cm([zips[0].name]) + pyZip(zips[0].url), ids: [zips[0].id] })
+    cells.push({
+      label: zips[0].name,
+      kind: 'zip',
+      text: cm([zips[0].name]) + pyZip(zips[0].url),
+      ids: [zips[0].id],
+    })
   else if (zips.length > 1)
     cells.push({
       label: `${zips.length} zips`,
       kind: 'zip',
-      text: cm(zips.map((x) => x.name)) + pyMany(zips.map((x) => x.url), 'zip', s.workers),
+      text:
+        cm(zips.map((x) => x.name)) +
+        pyMany(
+          zips.map((x) => x.url),
+          'zip',
+          s.workers,
+        ),
       ids: zips.map((x) => x.id),
     })
   if (rars.length === 1)
-    cells.push({ label: rars[0].name, kind: 'rar', text: cm([rars[0].name]) + pyRar(rars[0].url), ids: [rars[0].id] })
+    cells.push({
+      label: rars[0].name,
+      kind: 'rar',
+      text: cm([rars[0].name]) + pyRar(rars[0].url),
+      ids: [rars[0].id],
+    })
   else if (rars.length > 1)
     cells.push({
       label: `${rars.length} rars`,
       kind: 'rar',
-      text: cm(rars.map((x) => x.name)) + pyMany(rars.map((x) => x.url), 'rar', s.workers),
+      text:
+        cm(rars.map((x) => x.name)) +
+        pyMany(
+          rars.map((x) => x.url),
+          'rar',
+          s.workers,
+        ),
       ids: rars.map((x) => x.id),
     })
 
   // movies: each one in a cell by itself
   movies.forEach(({ f, fn }) =>
-    cells.push({ label: f.name, kind: 'movie', text: cm([f.name]) + wgetOne(f, fn), ids: [f.id] }),
+    cells.push({
+      label: f.name,
+      kind: 'movie',
+      text: cm([f.name]) + wgetOne(f, fn),
+      ids: [f.id],
+    }),
   )
 
   if (wg.length === 1) {
     const { f, fn } = wg[0]
-    cells.push({ label: f.name, kind: 'wget', text: cm([f.name]) + wgetOne(f, fn), ids: [f.id] })
+    cells.push({
+      label: f.name,
+      kind: 'wget',
+      text: cm([f.name]) + wgetOne(f, fn),
+      ids: [f.id],
+    })
   } else if (wg.length > 1) {
     let text: string
     if (s.parallel) {
@@ -521,16 +609,30 @@ export const fmt = (members: LinkItem[], s: Settings, pos: Map<string, number>):
     } else {
       text = wg.map(({ f, fn }) => wgetOne(f, fn)).join('\n')
     }
-    cells.push({ label: `${wg.length} files`, kind: 'wget', text: cm(wg.map((x) => x.f.name)) + text, ids: wg.map((x) => x.f.id) })
+    cells.push({
+      label: `${wg.length} files`,
+      kind: 'wget',
+      text: cm(wg.map((x) => x.f.name)) + text,
+      ids: wg.map((x) => x.f.id),
+    })
   }
 
   if (plain.length)
-    cells.push({ label: `${plain.length} plain link(s)`, kind: 'plain', text: plain.map(line).join('\n'), ids: plain.map((f) => f.id) })
+    cells.push({
+      label: `${plain.length} plain link(s)`,
+      kind: 'plain',
+      text: plain.map(line).join('\n'),
+      ids: plain.map((f) => f.id),
+    })
   return cells
 }
 
 // All cells for the current selection, by copy mode.
-export const buildCells = (view: LinkItem[], groups: Group[], s: Settings): Cell[] => {
+export const buildCells = (
+  view: LinkItem[],
+  groups: Group[],
+  s: Settings,
+): Cell[] => {
   const pos = new Map(view.map((f, i) => [f.id, i + 1]))
   const inView = new Set(view.map((f) => f.id))
   if (s.mode === 'single') return view.flatMap((f) => fmt([f], s, pos))
@@ -539,7 +641,9 @@ export const buildCells = (view: LinkItem[], groups: Group[], s: Settings): Cell
       const sel = g.members.filter((f) => inView.has(f.id))
       if (!sel.length) return []
       if (g.type === 'movie') return sel.flatMap((f) => fmt([f], s, pos))
-      return fmt(sel, s, pos).map((c) => (c.ids.length > 1 ? { ...c, label: `${g.label} · ${c.label}` } : c))
+      return fmt(sel, s, pos).map((c) =>
+        c.ids.length > 1 ? { ...c, label: `${g.label} · ${c.label}` } : c,
+      )
     })
   }
   return fmt(view, s, pos)
@@ -547,7 +651,12 @@ export const buildCells = (view: LinkItem[], groups: Group[], s: Settings): Cell
 
 // Blank, fill-it-yourself cells (the original templates)
 export const blankCells = (workers: number): Cell[] => [
-  { label: 'Split ZIP (blank)', kind: 'split', text: pyMulti([['', '', '', '', '']], workers), ids: [] },
+  {
+    label: 'Split ZIP (blank)',
+    kind: 'split',
+    text: pyMulti([['', '', '', '', '']], workers),
+    ids: [],
+  },
   { label: 'RAR (blank)', kind: 'rar', text: pyRar(''), ids: [] },
   { label: 'ZIP (blank)', kind: 'zip', text: pyZip(''), ids: [] },
 ]

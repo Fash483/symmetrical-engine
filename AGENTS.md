@@ -114,10 +114,10 @@ Pages are rendered on the server first, where `window` and `localStorage` don't 
 
 ## Configuration Files
 
-| File             | Purpose                                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------------------ |
-| `vite.config.ts` | Vite path aliases and Tailwind, TanStack Start, React plugins                                    |
-| `tsconfig.json`  | Strict TypeScript, with the `@/*` alias for `src/*`                                              |
+| File             | Purpose                                                       |
+| ---------------- | ------------------------------------------------------------- |
+| `vite.config.ts` | Vite path aliases and Tailwind, TanStack Start, React plugins |
+| `tsconfig.json`  | Strict TypeScript, with the `@/*` alias for `src/*`           |
 
 ## Development Commands
 

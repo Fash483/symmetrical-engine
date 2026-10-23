@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_SETTINGS, buildCells, buildGroups, cmdKind, parseLinks } from './commands'
+import {
+  DEFAULT_SETTINGS,
+  buildCells,
+  buildGroups,
+  cmdKind,
+  parseLinks,
+} from './commands'
 
 const cellsFor = (input: string, s = DEFAULT_SETTINGS) => {
   const items = parseLinks(input)
@@ -9,7 +15,9 @@ const cellsFor = (input: string, s = DEFAULT_SETTINGS) => {
 
 describe('parseLinks', () => {
   it('splits links glued together with no spaces', () => {
-    const items = parseLinks('https://a.com/One.mkvhttps://b.com/Two.mp4?t=1https://c.com/x.zip')
+    const items = parseLinks(
+      'https://a.com/One.mkvhttps://b.com/Two.mp4?t=1https://c.com/x.zip',
+    )
     expect(items.map((f) => f.url)).toEqual([
       'https://a.com/One.mkv',
       'https://b.com/Two.mp4?t=1',
@@ -40,7 +48,9 @@ describe('commands', () => {
 
   it('forces the real file name when the link has query parameters', () => {
     const [c] = cellsFor('https://a.com/A.2020.mkv?sig=1')
-    expect(c.text).toBe('! wget -O "A.2020.mkv" "https://a.com/A.2020.mkv?sig=1"')
+    expect(c.text).toBe(
+      '! wget -O "A.2020.mkv" "https://a.com/A.2020.mkv?sig=1"',
+    )
   })
 })
 
@@ -52,7 +62,9 @@ describe('filename in URL fragment', () => {
   it('uses the #name as the file name and classifies it as zip', () => {
     const items = parseLinks(`${a}\n${b}`)
     expect(items).toHaveLength(2)
-    expect(items[0].name).toBe('Carrie S01E01 FIRST PERIOD 720p AMZN WEB-DL DDP5 1 Atmos H 264-RAWR[EZTVx.to]_part01.zip')
+    expect(items[0].name).toBe(
+      'Carrie S01E01 FIRST PERIOD 720p AMZN WEB-DL DDP5 1 Atmos H 264-RAWR[EZTVx.to]_part01.zip',
+    )
     expect(items.every((f) => f.type === 'zip')).toBe(true)
     expect(items.every((f) => cmdKind(f) === 'zip')).toBe(true)
   })
