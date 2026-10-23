@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { toast } from 'sonner'
-import { Check, ClipboardCopy, Search, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import {
+  Check,
+  ClipboardCopy,
+  Search,
+  Sparkles,
+  Trash2,
+  Wand2,
+  X,
+} from 'lucide-react'
 
 import { Switch } from '@/components/ui/switch'
 import {
@@ -48,24 +56,49 @@ const CELL_EMOJI: Record<string, string> = {
   plain: '🔗',
 }
 const MODES: [CopyMode, string, string][] = [
-  ['all', 'Together', 'Everything in as few cells as possible (movies still alone)'],
+  [
+    'all',
+    'Together',
+    'Everything in as few cells as possible (movies still alone)',
+  ],
   ['group', 'By group', 'One cell per group — each movie on its own'],
   ['single', 'One by one', 'A separate cell for every single link'],
 ]
 
 const LS = { input: 'lp_input', settings: 'lp_settings', off: 'lp_off' }
+const NO_COPIES: ReadonlySet<number> = new Set()
+
+// Space-separated words must all match (AND); comma-separated groups are alternatives (OR).
+const searchMatcher = (search: string) => {
+  const terms = search
+    .toLowerCase()
+    .split(',')
+    .map((q) => q.trim().split(/\s+/).filter(Boolean))
+    .filter((a) => a.length)
+  return (name: string) =>
+    !terms.length ||
+    terms.some((ws) => ws.every((w) => name.toLowerCase().includes(w)))
+}
 
 function Home() {
   const [input, setInput] = useState('')
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [off, setOff] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
-  const [copied, setCopied] = useState<Set<number>>(new Set())
+  const [copiedState, setCopiedState] = useState<{
+    key: string
+    idx: Set<number>
+  }>({
+    key: '',
+    idx: new Set(),
+  })
   const [ready, setReady] = useState(false)
 
-  // restore from this browser
+  // Restore from this browser after hydration; localStorage doesn't exist during SSR.
   useEffect(() => {
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time sync from external storage
+      setInput(localStorage.getItem(LS.input) ?? '')
       setInput(localStorage.getItem(LS.input) ?? '')
       const s = localStorage.getItem(LS.settings)
       if (s) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(s) })
@@ -91,22 +124,25 @@ function Home() {
   }, [parsed, settings.dedupe])
   const groups = useMemo(() => buildGroups(items), [items])
 
-  const terms = search
-    .toLowerCase()
-    .split(',')
-    .map((q) => q.trim().split(/\s+/).filter(Boolean))
-    .filter((a) => a.length)
-  const matches = (name: string) =>
-    !terms.length || terms.some((ws) => ws.every((w) => name.toLowerCase().includes(w)))
-
-  const shown = items.filter((f) => matches(f.name))
-  const view = shown.filter((f) => !off.has(f.url))
+  const matches = useMemo(() => searchMatcher(search), [search])
+  const shown = useMemo(
+    () => items.filter((f) => matches(f.name)),
+    [items, matches],
+  )
+  const view = useMemo(() => shown.filter((f) => !off.has(f.url)), [shown, off])
   const cells = useMemo(
     () => buildCells(view, groups, settings),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [JSON.stringify(view.map((f) => f.id)), groups, settings],
+    [view, groups, settings],
   )
-  useEffect(() => setCopied(new Set()), [cells])
+
+  // "Copied" marks belong to one exact output; any change to the cells' text resets them.
+  const cellsKey = useMemo(() => cells.map((c) => c.text).join('\0'), [cells])
+  const copied = copiedState.key === cellsKey ? copiedState.idx : NO_COPIES
+  const markCopied = (i: number) =>
+    setCopiedState((s) => ({
+      key: cellsKey,
+      idx: new Set(s.key === cellsKey ? s.idx : []).add(i),
+    }))
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) =>
     setSettings((s) => ({ ...s, [k]: v }))
@@ -119,7 +155,9 @@ function Home() {
 
   const copy = async (text: string, what: string) => {
     try {
-      await navigator.clipboard.writeText(text.endsWith('\n') ? text : text + '\n')
+      await navigator.clipboard.writeText(
+        text.endsWith('\n') ? text : text + '\n',
+      )
       toast.success(`Copied ${what}`)
       return true
     } catch {
@@ -128,12 +166,13 @@ function Home() {
     }
   }
   const copyCell = async (i: number) => {
-    if (await copy(cells[i].text, cells[i].label)) setCopied((c) => new Set(c).add(i))
+    if (await copy(cells[i].text, cells[i].label)) markCopied(i)
   }
   const blanks = useMemo(() => blankCells(settings.workers), [settings.workers])
   const [copiedB, setCopiedB] = useState<Set<number>>(new Set())
   const copyBlank = async (i: number) => {
-    if (await copy(blanks[i].text, blanks[i].label)) setCopiedB((c) => new Set(c).add(i))
+    if (await copy(blanks[i].text, blanks[i].label))
+      setCopiedB((c) => new Set(c).add(i))
   }
   const nextIdx = cells.findIndex((_, i) => !copied.has(i))
   const queryCount = items.filter((f) => f.hasQuery).length
@@ -147,13 +186,20 @@ function Home() {
             <span className="bg-gradient-to-br from-fuchsia-500 via-purple-600 to-violet-700 bg-clip-text text-transparent">
               LinkPop
             </span>
-            <span className="sticker ml-2 align-top text-4xl" style={{ transform: 'rotate(14deg)' }}>
+            <span
+              className="sticker ml-2 align-top text-4xl"
+              style={{ transform: 'rotate(14deg)' }}
+            >
               💜
             </span>
           </h1>
           <p className="max-w-xl pb-2 text-lg text-muted-foreground">
-            Paste download links — even glued together with no spaces — and get ready-to-run Colab
-            cells. Movies come out alone as <code className="lp-code rounded bg-purple-100 px-1.5 text-purple-800">! wget --content-disposition</code>.
+            Paste download links — even glued together with no spaces — and get
+            ready-to-run Colab cells. Movies come out alone as{' '}
+            <code className="lp-code rounded bg-purple-100 px-1.5 text-purple-800">
+              ! wget --content-disposition
+            </code>
+            .
           </p>
         </div>
       </header>
@@ -164,7 +210,9 @@ function Home() {
           <section className="lp-card p-5">
             <Corner emoji="🔮" />
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="font-display text-xl font-semibold">1 · Paste links</h2>
+              <h2 className="font-display text-xl font-semibold">
+                1 · Paste links
+              </h2>
               <div className="flex flex-wrap gap-2">
                 <button
                   className="rounded-full border border-border bg-white px-3 py-2 text-sm font-semibold hover:bg-purple-50 sm:py-1"
@@ -192,21 +240,29 @@ function Home() {
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              aria-label="Download links"
               spellCheck={false}
-              placeholder={'https://…/Movie.2024.mkvhttps://…/Show.S01E01.mkv?token=…\n\nOptional: put a file name on the line above a link.'}
+              placeholder={
+                'https://…/Movie.2024.mkvhttps://…/Show.S01E01.mkv?token=…\n\nOptional: put a file name on the line above a link.'
+              }
               className="lp-code lp-scroll h-48 w-full resize-y rounded-2xl border-[1.5px] border-border bg-white/90 p-3 text-base leading-relaxed sm:text-[12.5px] outline-none placeholder:text-purple-300 focus:border-primary focus:ring-4 focus:ring-primary/15"
             />
             <div className="mt-3 flex flex-wrap gap-2 text-sm">
               <Stat n={items.length} label="links" />
               <Stat n={queryCount} label="with ?query → -O name" />
-              <Stat n={items.length - queryCount} label="clean → content-disposition" />
+              <Stat
+                n={items.length - queryCount}
+                label="clean → content-disposition"
+              />
               {dupes > 0 && <Stat n={dupes} label="dupes skipped" />}
             </div>
           </section>
 
           <section className="lp-card p-5">
             <Corner emoji="🎀" />
-            <h2 className="mb-3 font-display text-xl font-semibold">2 · Options</h2>
+            <h2 className="mb-3 font-display text-xl font-semibold">
+              2 · Options
+            </h2>
             <div className="mb-4">
               <div className="mb-1.5 text-xs font-extrabold tracking-widest text-muted-foreground uppercase">
                 Output cells
@@ -277,14 +333,24 @@ function Home() {
               <label className="flex items-center justify-between gap-3">
                 <span className="min-w-0">
                   <span className="block font-bold">Workers</span>
-                  <span className="block text-xs text-muted-foreground">Concurrent downloads</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Concurrent downloads
+                  </span>
                 </span>
                 <input
                   type="number"
                   min={1}
                   max={64}
                   value={settings.workers}
-                  onChange={(e) => set('workers', Math.max(1, Math.min(64, parseInt(e.target.value, 10) || 1)))}
+                  onChange={(e) =>
+                    set(
+                      'workers',
+                      Math.max(
+                        1,
+                        Math.min(64, parseInt(e.target.value, 10) || 1),
+                      ),
+                    )
+                  }
                   className="w-16 shrink-0 rounded-full border-[1.5px] border-border bg-white px-3 py-1 text-center text-base outline-none sm:text-sm focus:border-primary"
                 />
               </label>
@@ -294,17 +360,29 @@ function Home() {
           <section className="lp-card p-5">
             <Corner emoji="🍇" />
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="font-display text-xl font-semibold">3 · Pick links</h2>
+              <h2 className="font-display text-xl font-semibold">
+                3 · Pick links
+              </h2>
               <div className="flex gap-2 text-sm">
                 <button
                   className="rounded-full border border-border bg-white px-3 py-2 font-semibold hover:bg-purple-50 sm:py-1"
-                  onClick={() => toggleOff(shown.map((f) => f.url), false)}
+                  onClick={() =>
+                    toggleOff(
+                      shown.map((f) => f.url),
+                      false,
+                    )
+                  }
                 >
                   All
                 </button>
                 <button
                   className="rounded-full border border-border bg-white px-3 py-2 font-semibold hover:bg-purple-50 sm:py-1"
-                  onClick={() => toggleOff(shown.map((f) => f.url), true)}
+                  onClick={() =>
+                    toggleOff(
+                      shown.map((f) => f.url),
+                      true,
+                    )
+                  }
                 >
                   None
                 </button>
@@ -315,11 +393,16 @@ function Home() {
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search links"
                 placeholder="Search… (space = AND, comma = OR)"
                 className="w-full rounded-full border-[1.5px] border-border bg-white py-2 pr-9 pl-9 text-base outline-none sm:text-sm focus:border-primary focus:ring-4 focus:ring-primary/15"
               />
               {search && (
-                <button className="absolute top-1/2 right-3 -translate-y-1/2" onClick={() => setSearch('')}>
+                <button
+                  aria-label="Clear search"
+                  className="absolute top-1/2 right-3 -translate-y-1/2"
+                  onClick={() => setSearch('')}
+                >
                   <X className="size-4 text-purple-400" />
                 </button>
               )}
@@ -331,7 +414,9 @@ function Home() {
                   No links yet — paste some above.
                 </p>
               ) : !shown.length ? (
-                <p className="p-6 text-center text-sm text-muted-foreground">No matches</p>
+                <p className="p-6 text-center text-sm text-muted-foreground">
+                  No matches
+                </p>
               ) : (
                 groups.map((g) => {
                   const ms = g.members.filter((f) => matches(f.name))
@@ -347,13 +432,25 @@ function Home() {
                           ref={(el) => {
                             if (el) el.indeterminate = on > 0 && on < ms.length
                           }}
-                          onChange={(e) => toggleOff(ms.map((f) => f.url), !e.target.checked)}
+                          onChange={(e) =>
+                            toggleOff(
+                              ms.map((f) => f.url),
+                              !e.target.checked,
+                            )
+                          }
                         />
-                        <span className={cn('rounded-full border px-1.5 text-[10px]', KIND_STYLE[g.type])}>
+                        <span
+                          className={cn(
+                            'rounded-full border px-1.5 text-[10px]',
+                            KIND_STYLE[g.type],
+                          )}
+                        >
                           {TAG[g.type]}
                         </span>
                         <span className="flex-1 truncate">{g.label}</span>
-                        <span className="text-xs text-muted-foreground">{ms.length}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {ms.length}
+                        </span>
                       </label>
                       {ms.map((f) => (
                         <label
@@ -365,16 +462,29 @@ function Home() {
                             type="checkbox"
                             className="mt-0.5 accent-purple-600"
                             checked={!off.has(f.url)}
-                            onChange={(e) => toggleOff([f.url], !e.target.checked)}
+                            onChange={(e) =>
+                              toggleOff([f.url], !e.target.checked)
+                            }
                           />
-                          <span className={cn('min-w-0 flex-1 break-all', off.has(f.url) && 'opacity-45')}>
+                          <span
+                            className={cn(
+                              'min-w-0 flex-1 break-all',
+                              off.has(f.url) && 'opacity-45',
+                            )}
+                          >
                             {f.name}
-                            {f.failed && <span className="ml-1 text-xs font-bold text-rose-600">· failed</span>}
+                            {f.failed && (
+                              <span className="ml-1 text-xs font-bold text-rose-600">
+                                · failed
+                              </span>
+                            )}
                           </span>
                           <span
                             className={cn(
                               'shrink-0 rounded-full px-1.5 text-[10px] font-bold',
-                              f.hasQuery ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700',
+                              f.hasQuery
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-emerald-100 text-emerald-700',
                             )}
                             title={
                               f.hasQuery
@@ -401,7 +511,9 @@ function Home() {
             <h2 className="font-display text-xl font-semibold">
               4 · Commands
               <span className="ml-2 text-sm font-normal text-muted-foreground">
-                {cells.length} cell{cells.length === 1 ? '' : 's'} · {view.length} link{view.length === 1 ? '' : 's'}
+                {cells.length} cell{cells.length === 1 ? '' : 's'} ·{' '}
+                {view.length} link
+                {view.length === 1 ? '' : 's'}
               </span>
             </h2>
             <div className="flex w-full gap-2 sm:w-auto">
@@ -411,11 +523,15 @@ function Home() {
                 className="lp-btn-pri flex-1 rounded-full px-4 py-2 text-sm font-bold transition-transform sm:flex-none sm:py-1.5 hover:-translate-y-0.5 disabled:opacity-40"
               >
                 <Sparkles className="mr-1 inline size-4" />
-                {nextIdx < 0 ? 'All copied' : `Copy next ${nextIdx + 1}/${cells.length}`}
+                {nextIdx < 0
+                  ? 'All copied'
+                  : `Copy next ${nextIdx + 1}/${cells.length}`}
               </button>
               <button
                 disabled={!cells.length}
-                onClick={() => copy(cells.map((c) => c.text).join('\n\n'), 'everything')}
+                onClick={() =>
+                  copy(cells.map((c) => c.text).join('\n\n'), 'everything')
+                }
                 className="flex-1 rounded-full border-[1.5px] border-border bg-white px-4 py-2 text-sm font-bold hover:bg-purple-50 disabled:opacity-40 sm:flex-none sm:py-1.5"
               >
                 Copy all
@@ -425,22 +541,39 @@ function Home() {
           <div className="lp-scroll flex lg:max-h-[calc(100dvh-9rem)] flex-col gap-3 overflow-auto pr-1">
             {!cells.length ? (
               <div className="rounded-2xl border-2 border-dashed border-border p-10 text-center text-muted-foreground">
-                <span className="sticker sticker-float mb-3 block text-5xl" style={{ '--r': '-8deg' } as CSSProperties}>
+                <span
+                  className="sticker sticker-float mb-3 block text-5xl"
+                  style={{ '--r': '-8deg' } as CSSProperties}
+                >
                   🦄
                 </span>
                 Your Colab cells appear here.
               </div>
             ) : (
               cells.map((c, i) => (
-                <CellCard key={i} cell={c} n={i + 1} copied={copied.has(i)} onCopy={() => copyCell(i)} />
+                <CellCard
+                  key={i}
+                  cell={c}
+                  n={i + 1}
+                  copied={copied.has(i)}
+                  onCopy={() => copyCell(i)}
+                />
               ))
             )}
           </div>
           <details className="mt-4 min-w-0 rounded-2xl border border-border bg-white/70 p-3">
-            <summary className="cursor-pointer py-1 font-semibold">Blank templates</summary>
+            <summary className="cursor-pointer py-1 font-semibold">
+              Blank templates
+            </summary>
             <div className="mt-3 flex flex-col gap-3">
               {blanks.map((c, i) => (
-                <CellCard key={i} cell={c} n={i + 1} copied={copiedB.has(i)} onCopy={() => copyBlank(i)} />
+                <CellCard
+                  key={i}
+                  cell={c}
+                  n={i + 1}
+                  copied={copiedB.has(i)}
+                  onCopy={() => copyBlank(i)}
+                />
               ))}
             </div>
           </details>
@@ -448,7 +581,8 @@ function Home() {
       </main>
 
       <footer className="relative pb-8 text-center text-sm text-muted-foreground">
-        <span className="sticker mr-1">🧁</span> Everything runs in your browser — links never leave this page.
+        <span className="sticker mr-1">🧁</span> Everything runs in your browser
+        — links never leave this page.
       </footer>
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-white/95 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur lg:hidden">
@@ -458,25 +592,44 @@ function Home() {
           className="lp-btn-pri w-full rounded-full py-3 font-bold disabled:opacity-40"
         >
           <Sparkles className="mr-1 inline size-4" />
-          {nextIdx < 0 ? 'All copied' : `Copy next ${nextIdx + 1}/${cells.length}`}
+          {nextIdx < 0
+            ? 'All copied'
+            : `Copy next ${nextIdx + 1}/${cells.length}`}
         </button>
       </div>
     </div>
   )
 }
 
-function CellCard({ cell, n, copied, onCopy }: { cell: Cell; n: number; copied: boolean; onCopy: () => void }) {
+function CellCard({
+  cell,
+  n,
+  copied,
+  onCopy,
+}: {
+  cell: Cell
+  n: number
+  copied: boolean
+  onCopy: () => void
+}) {
   return (
     <div
       className={cn(
         'overflow-hidden rounded-2xl border-[1.5px] transition-colors',
-        copied ? 'border-emerald-300 bg-emerald-50/60' : 'border-border bg-white',
+        copied
+          ? 'border-emerald-300 bg-emerald-50/60'
+          : 'border-border bg-white',
       )}
     >
       <div className="flex items-center gap-2 border-b border-border/70 bg-gradient-to-r from-purple-50 to-fuchsia-50 px-3 py-1.5">
-        <span className="sticker text-base">{CELL_EMOJI[cell.kind] ?? '📄'}</span>
+        <span className="sticker text-base">
+          {CELL_EMOJI[cell.kind] ?? '📄'}
+        </span>
         <span className="text-xs font-extrabold text-purple-500">#{n}</span>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold" title={cell.label}>
+        <span
+          className="min-w-0 flex-1 truncate text-sm font-semibold"
+          title={cell.label}
+        >
           {cell.label}
         </span>
         <button
@@ -486,7 +639,11 @@ function CellCard({ cell, n, copied, onCopy }: { cell: Cell; n: number; copied: 
             copied ? 'bg-emerald-500 text-white' : 'lp-btn-pri',
           )}
         >
-          {copied ? <Check className="size-3.5" /> : <ClipboardCopy className="size-3.5" />}
+          {copied ? (
+            <Check className="size-3.5" />
+          ) : (
+            <ClipboardCopy className="size-3.5" />
+          )}
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
@@ -511,12 +668,22 @@ function Toggle({
   onChange: (v: boolean) => void
 }) {
   return (
-    <label className={cn('flex cursor-pointer items-center justify-between gap-3', disabled && 'opacity-45')}>
+    <label
+      className={cn(
+        'flex cursor-pointer items-center justify-between gap-3',
+        disabled && 'opacity-45',
+      )}
+    >
       <span className="min-w-0">
         <span className="block font-bold">{label}</span>
         <span className="block text-xs text-muted-foreground">{hint}</span>
       </span>
-      <Switch className="shrink-0" checked={checked} disabled={disabled} onCheckedChange={onChange} />
+      <Switch
+        className="shrink-0"
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+      />
     </label>
   )
 }
@@ -524,14 +691,18 @@ function Toggle({
 function Stat({ n, label }: { n: number; label: string }) {
   return (
     <span className="rounded-full border border-border bg-white/90 px-3 py-0.5">
-      <b className="text-purple-700">{n}</b> <span className="text-muted-foreground">{label}</span>
+      <b className="text-purple-700">{n}</b>{' '}
+      <span className="text-muted-foreground">{label}</span>
     </span>
   )
 }
 
 function Corner({ emoji }: { emoji: string }) {
   return (
-    <span className="sticker absolute -top-4 -right-2 z-10 text-3xl" style={{ transform: 'rotate(12deg)' }}>
+    <span
+      className="sticker absolute -top-4 -right-2 z-10 text-3xl"
+      style={{ transform: 'rotate(12deg)' }}
+    >
       {emoji}
     </span>
   )
@@ -548,12 +719,22 @@ const FLOATERS: [string, string, string, string][] = [
 
 function Stickers() {
   return (
-    <div aria-hidden className="pointer-events-none absolute inset-0 hidden overflow-hidden md:block">
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 hidden overflow-hidden md:block"
+    >
       {FLOATERS.map(([e, left, top, r], i) => (
         <span
           key={i}
           className="sticker sticker-float absolute text-4xl opacity-90"
-          style={{ left, top, '--r': r, animationDelay: `${i * 0.7}s` } as CSSProperties}
+          style={
+            {
+              left,
+              top,
+              '--r': r,
+              animationDelay: `${i * 0.7}s`,
+            } as CSSProperties
+          }
         >
           {e}
         </span>
