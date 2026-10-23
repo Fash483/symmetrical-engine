@@ -15,75 +15,71 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
+          # Required to allow pushing code back to the repo
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract and Replace All Files
+      - name: Clear Workspace (Keeping .github and ZIPs)
+        shell: bash
+        run: |
+          shopt -s dotglob nullglob
+          for f in *; do
+            [ "$f" = "." ] || [ "$f" = ".." ] && continue
+            [ "$f" = ".git" ] && continue
+            [ "$f" = ".github" ] && continue
+            [[ "$f" == *.zip ]] && continue
+            
+            echo "Removing old file/folder: $f"
+            rm -rf "$f"
+          done
+          shopt -u dotglob nullglob
+
+      - name: Extract and Flatten ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          # Find the ZIP file in the repository root
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' -print -quit)
-
+          ZIP_FILE=$(find . -maxdepth 1 -name '*.zip' -print -quit)
           if [ -z "$ZIP_FILE" ]; then
             echo "No ZIP file found, nothing to extract."
             exit 0
           fi
 
-          # Extract ZIP contents
-          rm -rf extract_tmp replacement_tmp
-          mkdir extract_tmp
+          rm -rf extract_tmp target_dir
+          mkdir extract_tmp target_dir
 
           unzip -q "$ZIP_FILE" -d extract_tmp
+          rm -f "$ZIP_FILE"
 
-          # Remove macOS metadata
-          find extract_tmp -type d -name "__MACOSX" -prune -exec rm -rf {} +
-          find extract_tmp -type f -name ".DS_Store" -delete
+          find extract_tmp -name "__MACOSX" -exec rm -rf {} + 2>/dev/null || true
+          find extract_tmp -name ".DS_Store" -exec rm -f {} + 2>/dev/null || true
 
-          # Flatten a single enclosing directory if present
           shopt -s dotglob nullglob
           items=(extract_tmp/*)
           shopt -u dotglob nullglob
 
-          SRC="extract_tmp"
-
-          if [ ${#items[@]} -eq 1 ] && [ -d "${items[0]}" ]; then
-            SRC="${items[0]}"
+          if [ ${#items[@]} -eq 1 ] && [ -d "${items}" ]; then
+            SRC="${items}"
+          else
+            SRC="extract_tmp"
           fi
 
-          # Stage the new files separately
-          mkdir replacement_tmp
-          find "$SRC" -mindepth 1 -maxdepth 1 \
-            -exec cp -a -t replacement_tmp/ {} +
+          find "$SRC" -mindepth 1 -maxdepth 1 -exec mv -t target_dir/ {} +
+          rm -rf extract_tmp
 
-          # Remove existing repository files, except .git and .github
-          find . -mindepth 1 -maxdepth 1 \
-            ! -name '.git' \
-            ! -name '.github' \
-            ! -name 'extract_tmp' \
-            ! -name 'replacement_tmp' \
-            -exec rm -rf -- {} +
+          find target_dir -mindepth 1 -maxdepth 1 -exec cp -rp -t ./ {} +
+          rm -rf target_dir
 
-          # Copy replacement files into the repository root
-          # Preserve .github and all its contents
-          cp -a replacement_tmp/. .
-
-          # Clean up temporary files
-          rm -rf extract_tmp replacement_tmp
-
-      - name: Commit and Push Changes
-        shell: bash
+      - name: Save Files to Repository
         run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add -A
 
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
+          # Only commit if there are actually changes to prevent workflow crashes
+          if git diff --staged --quiet; then
+            echo "No new files to save."
           else
-            git commit -m "Replace repository files with ZIP contents"
-            git push origin HEAD:main
+            git commit -m "Clear directory and update with extracted project files"
+            git push origin main
           fi
