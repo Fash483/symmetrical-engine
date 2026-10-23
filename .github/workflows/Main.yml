@@ -1,0 +1,89 @@
+name: Extract ZIP to Main Directory
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract and Replace All Files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Find the ZIP file in the repository root
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name '*.zip' -print -quit)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No ZIP file found, nothing to extract."
+            exit 0
+          fi
+
+          # Extract ZIP contents
+          rm -rf extract_tmp replacement_tmp
+          mkdir extract_tmp
+
+          unzip -q "$ZIP_FILE" -d extract_tmp
+
+          # Remove macOS metadata
+          find extract_tmp -type d -name "__MACOSX" -prune -exec rm -rf {} +
+          find extract_tmp -type f -name ".DS_Store" -delete
+
+          # Flatten a single enclosing directory if present
+          shopt -s dotglob nullglob
+          items=(extract_tmp/*)
+          shopt -u dotglob nullglob
+
+          SRC="extract_tmp"
+
+          if [ ${#items[@]} -eq 1 ] && [ -d "${items[0]}" ]; then
+            SRC="${items[0]}"
+          fi
+
+          # Stage the new files separately
+          mkdir replacement_tmp
+          find "$SRC" -mindepth 1 -maxdepth 1 \
+            -exec cp -a -t replacement_tmp/ {} +
+
+          # Remove existing repository files, except .git and .github
+          find . -mindepth 1 -maxdepth 1 \
+            ! -name '.git' \
+            ! -name '.github' \
+            ! -name 'extract_tmp' \
+            ! -name 'replacement_tmp' \
+            -exec rm -rf -- {} +
+
+          # Copy replacement files into the repository root
+          # Preserve .github and all its contents
+          cp -a replacement_tmp/. .
+
+          # Clean up temporary files
+          rm -rf extract_tmp replacement_tmp
+
+      - name: Commit and Push Changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Replace repository files with ZIP contents"
+            git push origin HEAD:main
+          fi
