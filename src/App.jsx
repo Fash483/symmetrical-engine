@@ -32,11 +32,7 @@ function groupOf(name, by) {
 const TPL = `# @HEADER@
 import os
 import boto3
-from kaggle_secrets import UserSecretsClient
-
-s = UserSecretsClient()
-B2_KEY_ID = s.get_secret("B2_KEY_ID")
-B2_APPLICATION_KEY = s.get_secret("B2_APPLICATION_KEY")
+@AUTH@
 
 B2_REGION = "@REGION@"
 B2_BUCKET_NAME = "@BUCKET@"
@@ -105,7 +101,51 @@ if __name__ == "__main__":
     main()
 `;
 
+const AUTH_KAGGLE = `from kaggle_secrets import UserSecretsClient
+
+s = UserSecretsClient()
+B2_KEY_ID = s.get_secret("B2_KEY_ID")
+B2_APPLICATION_KEY = s.get_secret("B2_APPLICATION_KEY")`;
+
+// Downloads a txt (line 1 = key id, line 2 = application key), reads it, then deletes it.
+const AUTH_URL = `import re
+import urllib.request
+from urllib.parse import urljoin
+
+CREDS_URL = @CREDS_URL@
+CREDS_FILE = "/kaggle/working/b2_creds.txt"
+
+def _get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read(), r.headers.get("Content-Type", ""), r.geturl()
+
+def load_creds():
+    data, ctype, final = _get(CREDS_URL)
+    if "html" in ctype.lower():  # a download page: follow its download link
+        html = data.decode("utf-8", "ignore")
+        links = re.findall(r"""href=["']([^"']+)["']""", html)
+        pick = [l for l in links if ".txt" in l.lower() or "download" in l.lower()]
+        if not pick:
+            raise RuntimeError("No download link found on the credentials page")
+        data, ctype, final = _get(urljoin(final, pick[0]))
+    with open(CREDS_FILE, "wb") as f:
+        f.write(data)
+    try:
+        with open(CREDS_FILE, encoding="utf-8-sig") as f:
+            lines = [l.strip() for l in f.read().splitlines() if l.strip()]
+        if len(lines) < 2:
+            raise RuntimeError("Credentials txt needs the key id on line 1 and the application key on line 2")
+        return lines[0], lines[1]
+    finally:
+        os.remove(CREDS_FILE)  # always remove the txt
+
+B2_KEY_ID, B2_APPLICATION_KEY = load_creds()`;
+
+const DEF_CREDS_URL = "https://tfnqdcsnbmpckvjkitqs.supabase.co/functions/v1/download-page/f900acc7-3930-4f8a-8bdb-2ff76566fa98";
+
 const DEF = {
+  auth: "kaggle", credsUrl: DEF_CREDS_URL,
   bucket: "Arielleb", region: "us-east-005", prefix: "", dir: "/", kw: "", mode: "all", fileKw: "",
   group: "season", sort: "name", split: false, colab: false, folders: true, paste: "", items: [],
 };
@@ -274,6 +314,7 @@ export default function App() {
     const names = base.map((i) => "# - " + i.name).join("\n");
     return TPL
       .replace("@HEADER@", () => header + "\n" + names)
+      .replace("@AUTH@", () => (s.auth === "url" ? AUTH_URL.replace("@CREDS_URL@", () => JSON.stringify(s.credsUrl.trim())) : AUTH_KAGGLE))
       .replace("@PART@", () => String(part || 0))
       .replace("@REGION@", () => s.region)
       .replace("@BUCKET@", () => s.bucket)
@@ -349,6 +390,15 @@ export default function App() {
             <input type="checkbox" checked={s.split} onChange={(e) => set({ split: e.target.checked })} />
             <span>Split files into 2 halves (copy each separately)</span>
           </label>
+        )}
+        {!s.colab && (
+          <select value={s.auth} onChange={(e) => set({ auth: e.target.value })}>
+            <option value="kaggle">Credentials: Kaggle secrets</option>
+            <option value="url">Credentials: download txt (id + key), then delete it</option>
+          </select>
+        )}
+        {!s.colab && s.auth === "url" && (
+          <input value={s.credsUrl} onChange={(e) => set({ credsUrl: e.target.value })} placeholder="URL of the credentials txt" />
         )}
         {!s.colab && (
           <details className="box">
