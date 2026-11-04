@@ -17,6 +17,11 @@ const dateTs = (str, mdy) => {
 const parseKw = (s) => s.split(/[,\n]+|\s+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
 const normDir = (d) => { const p = d.split("/").map((x) => x.trim()).filter(Boolean); return "/" + p.join("/") + (p.length ? "/" : ""); };
 
+// "copied" is a bitmask: 1 = part 1 copied, 2 = part 2 copied. A full/Colab copy sets both (3).
+// An item counts as copied once all bits are set, so with the 2-halves split it stays
+// visible until BOTH parts have been copied.
+const isCopied = (i) => ((i.cp || 0) & 3) === 3;
+
 function groupOf(name, by) {
   const other = { key: "~other", label: "Other", last: true };
   if (by === "off") return other;
@@ -148,6 +153,7 @@ const DEF = {
   auth: "kaggle", credsUrl: DEF_CREDS_URL,
   bucket: "Arielleb", region: "us-east-005", prefix: "", dir: "/", kw: "", mode: "all", fileKw: "",
   group: "season", sort: "name", split: false, colab: false, folders: true, paste: "", items: [],
+  hideCopied: false,
 };
 
 const CSS = `
@@ -171,6 +177,7 @@ const CSS = `
 #fgb-list{overflow-y:auto;max-height:50vh;min-height:90px;margin:4px 0}
 #fgb-list label{display:flex;gap:8px;padding:7px 8px;margin-bottom:4px;background:#FBEAF0;border:1.5px dotted #ED93B1;border-radius:10px;align-items:flex-start;word-break:break-all}
 #fgb-list label.sub{margin-left:14px}
+#fgb-list label.done{opacity:.6}
 #fgb-list input{flex:0 0 20px;width:20px;height:20px;margin:0}
 #fgb-list .gh{display:flex;gap:8px;padding:8px;margin:6px 0 4px;background:#F4C0D1;border-radius:10px;align-items:center;font-weight:600}
 #fgb-list .gh span{flex:1;word-break:break-word;cursor:pointer}
@@ -210,7 +217,7 @@ export default function App() {
           const dir = normDir(r.dir), k = dir + "\0" + r.name, old = idx.get(k);
           const date = typeof r.date === "string" ? r.date : "";
           if (old) { if (r.checked) old.checked = true; if (typeof r.isDir === "boolean") old.isDir = r.isDir; if (date) old.date = date; return; }
-          const it = { name: r.name, dir, isDir: !!r.isDir, checked: !!r.checked, idx: seq++, date };
+          const it = { name: r.name, dir, isDir: !!r.isDir, checked: !!r.checked, idx: seq++, date, cp: 0 };
           idx.set(k, it); next.push(it);
         });
         return { ...o, items: next };
@@ -260,7 +267,7 @@ export default function App() {
       const k = dir + "\0" + name;
       let it = map.get(k);
       if (!it) {
-        it = { name, dir, isDir: !isFile, checked: false, idx: seq++, date: "" };
+        it = { name, dir, isDir: !isFile, checked: false, idx: seq++, date: "", cp: 0 };
         map.set(k, it); items.push(it); added++;
       }
       last = it;
@@ -290,9 +297,10 @@ export default function App() {
 
   const kws = parseKw(s.kw);
   const visible = useMemo(
-    () => s.items.filter((i) => !kws.length || (s.mode === "any" ? kws.some((k) => i.name.toLowerCase().includes(k)) : kws.every((k) => i.name.toLowerCase().includes(k)))),
-    [s.items, s.kw, s.mode] // eslint-disable-line
+    () => s.items.filter((i) => (!s.hideCopied || !isCopied(i)) && (!kws.length || (s.mode === "any" ? kws.some((k) => i.name.toLowerCase().includes(k)) : kws.every((k) => i.name.toLowerCase().includes(k))))),
+    [s.items, s.kw, s.mode, s.hideCopied] // eslint-disable-line
   );
+  const copiedCount = s.items.filter(isCopied).length;
   const groups = useMemo(() => {
     const m = new Map();
     visible.forEach((i) => { const g = groupOf(i.name, s.group); if (!m.has(g.key)) m.set(g.key, { ...g, items: [] }); m.get(g.key).items.push(i); });
@@ -330,7 +338,11 @@ export default function App() {
 
   async function copy(part, id) {
     const code = s.colab ? buildList() : buildPython(part);
+    const bit = s.colab || !part ? 3 : part; // full / Colab copy = both halves
+    const done = new Set(base);
     try { await navigator.clipboard.writeText(code); } catch { /* ignore */ }
+    // remember what was copied (so "Hide copied items" can hide it)
+    if (done.size) setItems((a) => a.map((x) => (done.has(x) ? { ...x, cp: (x.cp || 0) | bit, checked: false } : x)));
     setCopied(id); setTimeout(() => setCopied(""), 1500);
   }
 
@@ -338,12 +350,12 @@ export default function App() {
   const mode = s.colab ? ` → Colab list of ${base.length} item(s)`
     : s.split ? " → split by FILE: Part 1 = first half, Part 2 = second half"
     : ` → ${base.length} item(s) in script`;
-  const info = `${s.items.length} stored (${here} here) · ${visible.length} match · ${ticked.length || "none"} ticked${mode}${ticked.length ? "" : " (nothing ticked = all matches)"} · dir ${normDir(s.dir)}`;
+  const info = `${s.items.length} stored (${here} here) · ${visible.length} match · ${ticked.length || "none"} ticked${mode}${ticked.length ? "" : " (nothing ticked = all matches)"} · ${copiedCount} copied${s.hideCopied ? " (hidden)" : ""} · dir ${normDir(s.dir)}`;
 
   const renderItem = (i, sub) => (
-    <label className={sub ? "sub" : ""} key={i.dir + i.name}>
+    <label className={(sub ? "sub" : "") + (isCopied(i) ? " done" : "")} key={i.dir + i.name}>
       <input type="checkbox" checked={i.checked} onChange={(e) => toggle(i, e.target.checked)} />
-      <span>{i.isDir ? "📁 " : "🎞 "}{i.name}{multiDir && <small style={{ display: "block", opacity: 0.65 }}>{i.dir}</small>}{isDateSort && i.date && <small style={{ display: "block", opacity: 0.65 }}>{i.date}</small>}</span>
+      <span>{isCopied(i) ? "✔ " : ""}{i.isDir ? "📁 " : "🎞 "}{i.name}{multiDir && <small style={{ display: "block", opacity: 0.65 }}>{i.dir}</small>}{isDateSort && i.date && <small style={{ display: "block", opacity: 0.65 }}>{i.date}</small>}</span>
     </label>
   );
 
@@ -380,6 +392,10 @@ export default function App() {
           </select>
         </div>
 
+        <label className="chkrow">
+          <input type="checkbox" checked={s.hideCopied} onChange={(e) => set({ hideCopied: e.target.checked })} />
+          <span>Hide copied items{copiedCount ? ` (${copiedCount})` : ""}</span>
+        </label>
         <label className="chkrow">
           <input type="checkbox" checked={s.colab} onChange={(e) => set({ colab: e.target.checked })} />
           <span>Colab mode (name | directory list)</span>
@@ -446,6 +462,7 @@ export default function App() {
           )}
         </div>
         <div className="row">
+          {copiedCount > 0 && <button onClick={() => setItems((a) => a.map((x) => ({ ...x, cp: 0 })))}>Reset copied marks</button>}
           <button onClick={() => confirm("Remove ALL stored items from every folder?") && set({ items: [] })}>Clear items</button>
         </div>
       </div>
