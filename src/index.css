@@ -1,0 +1,37 @@
+:root{--p:#D4537E;--l:#FBEAF0;--m:#F4C0D1;--d:#72243E}
+*{box-sizing:border-box}
+body{margin:0;background:#fff;color:var(--d);font:15px system-ui,sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:12px}
+h1{font-size:20px;background:var(--m);padding:8px 12px;border-radius:10px;margin:0 0 10px}
+section{border:2px dashed var(--p);border-radius:16px;padding:10px;margin-bottom:12px}
+h2{font-size:15px;margin:0 0 6px}
+input,select,textarea,button{font:inherit;padding:8px 10px;margin:3px 0;border-radius:10px;border:1.5px dotted var(--p);background:var(--l);color:var(--d);width:100%}
+textarea{min-height:110px;font-family:ui-monospace,monospace;font-size:12px}
+button{background:#fff;border:2px solid var(--p);color:#993556;font-weight:600;cursor:pointer}
+button.go{background:var(--p);color:#fff}
+.row{display:flex;gap:6px;align-items:center}.row>*{flex:1;min-width:0}
+label.chk{display:flex;gap:8px;align-items:center}
+label.chk input{width:22px;height:22px;flex:0 0 22px;margin:0;accent-color:var(--p)}
+.item{display:flex;gap:8px;padding:6px 8px;margin:3px 0 3px 12px;background:var(--l);border:1.5px dotted #ED93B1;border-radius:10px;word-break:break-all}
+.item input{width:20px;height:20px;flex:0 0 20px;margin:0}
+summary{background:var(--m);border-radius:10px;padding:8px;font-weight:600;margin:6px 0 3px;display:flex;gap:8px;align-items:center}
+summary input{width:20px;height:20px;margin:0;flex:0 0 20px}
+small{opacity:.7}
+
+#fgb details.tool>summary small{font-weight:400;margin-left:6px}
+#fgb .lbl{font-weight:700;font-size:13px;margin:8px 2px 2px}
+#fgb .note{display:block;background:#fff;border-radius:8px;padding:6px 8px;margin:4px 0}
+#fgb .bad{color:#b4234f}
+#fgb .mono,#fgb input.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+#fgb .seg{display:flex;border:1.5px solid #D4537E;border-radius:999px;overflow:hidden;margin:3px 0;background:#fff}
+#fgb .seg button{flex:1;margin:0;border:0;border-radius:0;font-size:12px;padding:7px 2px;background:#fff}
+#fgb .seg button+button{border-left:1.5px solid #D4537E}
+#fgb .seg button.on{background:#D4537E;color:#fff}
+#fgb .sub-box{border:1.5px dotted #ED93B1;border-radius:10px;padding:6px 8px;margin:6px 0;background:#fff}
+#fgb .chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+#fgb button.chip{margin:0;padding:3px 9px;font:12px ui-monospace,Menlo,Consolas,monospace;border-radius:999px;border:1px solid #ED93B1;background:#FBEAF0;word-break:break-all;font-weight:400}
+#fgb ul.pv{list-style:none;padding:0;margin:4px 0;max-height:220px;overflow:auto}
+#fgb ul.pv li{background:#FBEAF0;border-radius:8px;padding:5px 8px;margin-bottom:4px;font-size:12px;word-break:break-all}
+#fgb .old{text-decoration:line-through;opacity:.65}
+#fgb .new{font-weight:700}
+#fgb button:disabled{opacity:.45;cursor:default}
