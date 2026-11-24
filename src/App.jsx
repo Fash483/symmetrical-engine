@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import RenamePanel from "./RenamePanel.jsx";
 import FolderTreePanel from "./FolderTreePanel.jsx";
+import CloudPanel from "./CloudPanel.jsx";
 
 const LS = "b2grab_v2";
 const nat = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
@@ -411,6 +412,8 @@ export default function App() {
         <Cloud /><Sparkle /><Heart />
         <div id="fgb-head">Grab builder (B2)</div>
         {notice && <div id="fgb-notice">✔ {notice}</div>}
+
+        <CloudPanel appId="b2-web" keys={["b2grab_v2", "b2grab_rename", "b2grab_tree"]} rev={s} />
 
         <details className="box">
           <summary>＋ Add items (paste)</summary>
