@@ -6,13 +6,25 @@ export const loadCfg = (appId) => { try { return JSON.parse(localStorage.getItem
 export const saveCfg = (appId, c) => { try { localStorage.setItem(cfgKey(appId), JSON.stringify(c)); } catch { /* ignore */ } };
 
 let tableReady = false;
-async function query(conn, sql, params = []) {
+// Accepts the raw string or a psql '...' line. The HTTP endpoint needs the NON-pooled host.
+export function neonConn(raw) {
+  const m = String(raw || "").match(/postgres(?:ql)?:\/\/[^\s'"]+/i);
+  if (!m) throw new Error("not a Neon connection string (should start with postgresql://)");
+  return m[0].replace(/(@ep-[^./]*?)-pooler(?=\.)/i, "$1");
+}
+async function query(raw, sql, params = []) {
+  const conn = neonConn(raw);
   const host = new URL(conn.replace(/^postgres(ql)?:/i, "https:")).host;
-  const r = await fetch(`https://${host}/sql`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Neon-Connection-String": conn },
-    body: JSON.stringify({ query: sql, params }),
-  });
+  let r;
+  try {
+    r = await fetch(`https://${host}/sql`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Neon-Connection-String": conn },
+      body: JSON.stringify({ query: sql, params }),
+    });
+  } catch (e) {
+    throw new Error(`could not reach ${host} (${e.message}) - check the connection string, and disable ad/privacy blockers for this site`);
+  }
   const text = await r.text();
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
   return JSON.parse(text);
