@@ -1,57 +1,48 @@
-// Cloud backup to Neon via its SQL-over-HTTP endpoint (https://<host>/sql).
-// One row per (app, k) in table grab_backup; payload is a JSON envelope {v, ts, data}.
+// Cloud backup to Supabase (PostgREST). One row per (app, k) in table grab_backup;
+// payload is a JSON envelope {v, ts, data}. cfg = { url, key }.
 
 const cfgKey = (appId) => `grabcloud_cfg_${appId}`;
 export const loadCfg = (appId) => { try { return JSON.parse(localStorage.getItem(cfgKey(appId))) || {}; } catch { return {}; } };
 export const saveCfg = (appId, c) => { try { localStorage.setItem(cfgKey(appId), JSON.stringify(c)); } catch { /* ignore */ } };
+export const isReady = (cfg) => !!(cfg && cfg.url && cfg.key);
 
-let tableReady = false;
-// Accepts the raw string or a psql '...' line. The HTTP endpoint needs the NON-pooled host.
-export function neonConn(raw) {
-  const m = String(raw || "").match(/postgres(?:ql)?:\/\/[^\s'"]+/i);
-  if (!m) throw new Error("not a Neon connection string (should start with postgresql://)");
-  return m[0].replace(/(@ep-[^./]*?)-pooler(?=\.)/i, "$1");
-}
-async function query(raw, sql, params = []) {
-  const conn = neonConn(raw);
-  const host = new URL(conn.replace(/^postgres(ql)?:/i, "https:")).host;
+async function req(cfg, method, path, body, extra) {
+  const base = cfg.url.trim().replace(/\/+$/, "").replace(/\/rest\/v1$/, "");
   let r;
   try {
-    r = await fetch(`https://${host}/sql`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Neon-Connection-String": conn },
-      body: JSON.stringify({ query: sql, params }),
+    r = await fetch(`${base}/rest/v1/grab_backup${path}`, {
+      method,
+      headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json", ...(extra || {}) },
+      body,
     });
   } catch (e) {
-    throw new Error(`could not reach ${host} (${e.message}) - check the connection string, and disable ad/privacy blockers for this site`);
+    throw new Error(`could not reach ${base} (${e.message}) - check the project URL, ad-blockers/VPN, or the page's content-security policy`);
   }
   const text = await r.text();
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
-  return JSON.parse(text);
-}
-async function init(conn) {
-  if (tableReady) return;
-  await query(conn, "create table if not exists grab_backup (app text not null, k text not null, payload text not null, updated_at timestamptz not null default now(), primary key (app, k))");
-  tableReady = true;
+  if (!r.ok) {
+    const hint = r.status === 404 ? " - table grab_backup missing? run the setup SQL in Supabase" : r.status === 401 || r.status === 403 ? " - check the anon key and the table policy (setup SQL)" : "";
+    throw new Error(`HTTP ${r.status}: ${text.slice(0, 160)}${hint}`);
+  }
+  return text;
 }
 
 export const snapshot = (keys) => Object.fromEntries(keys.map((k) => { try { return [k, localStorage.getItem(k)]; } catch { return [k, null]; } }));
 
-export async function fetchRemote(conn, appId) {
-  await init(conn);
-  const r = await query(conn, "select payload from grab_backup where app = $1 and k = $2", [appId, "state"]);
-  const p = r.rows && r.rows[0] && r.rows[0].payload;
-  if (!p) return null;
-  const env = JSON.parse(p);
+export async function fetchRemote(cfg, appId) {
+  const t = await req(cfg, "GET", `?select=payload&app=eq.${encodeURIComponent(appId)}&k=eq.state`);
+  const rows = JSON.parse(t || "[]");
+  if (!rows[0]) return null;
+  const env = JSON.parse(rows[0].payload);
   return env && env.data ? env : null;
 }
 
-export async function push(conn, appId, keys) {
-  await init(conn);
+export async function push(cfg, appId, keys) {
   const ts = Date.now();
   const data = snapshot(keys);
   const text = JSON.stringify({ v: 1, id: appId, ts, data });
-  await query(conn, "insert into grab_backup (app, k, payload) values ($1, $2, $3) on conflict (app, k) do update set payload = excluded.payload, updated_at = now()", [appId, "state", text]);
+  await req(cfg, "POST", "?on_conflict=app,k",
+    JSON.stringify({ app: appId, k: "state", payload: text, updated_at: new Date().toISOString() }),
+    { Prefer: "resolution=merge-duplicates,return=minimal" });
   return { ts, size: text.length, snap: JSON.stringify(data) };
 }
 
