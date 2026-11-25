@@ -4,6 +4,11 @@
 const cfgKey = (appId) => `grabcloud_cfg_${appId}`;
 export const loadCfg = (appId) => { try { return JSON.parse(localStorage.getItem(cfgKey(appId))) || {}; } catch { return {}; } };
 export const saveCfg = (appId, c) => { try { localStorage.setItem(cfgKey(appId), JSON.stringify(c)); } catch { /* ignore */ } };
+let restoring = false; // true after a restore: App must not overwrite it before the reload
+export const isRestoring = () => restoring;
+const hash = (str) => { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return String(h); };
+export const hashState = (keys) => hash(JSON.stringify(snapshotOf(keys)));
+export const isEmptyState = (key) => { try { const j = JSON.parse(localStorage.getItem(key) || "null"); return !j || !Array.isArray(j.items) || j.items.length === 0; } catch { return false; } };
 export const isReady = (cfg) => !!(cfg && cfg.url && cfg.key);
 
 async function req(cfg, method, path, body, extra) {
@@ -26,7 +31,8 @@ async function req(cfg, method, path, body, extra) {
   return text;
 }
 
-export const snapshot = (keys) => Object.fromEntries(keys.map((k) => { try { return [k, localStorage.getItem(k)]; } catch { return [k, null]; } }));
+function snapshotOf(keys) { return Object.fromEntries(keys.map((k) => { try { return [k, localStorage.getItem(k)]; } catch { return [k, null]; } })); }
+export const snapshot = snapshotOf;
 
 export async function fetchRemote(cfg, appId) {
   const t = await req(cfg, "GET", `?select=payload&app=eq.${encodeURIComponent(appId)}&k=eq.state`);
@@ -43,10 +49,11 @@ export async function push(cfg, appId, keys) {
   await req(cfg, "POST", "?on_conflict=app,k",
     JSON.stringify({ app: appId, k: "state", payload: text, updated_at: new Date().toISOString() }),
     { Prefer: "resolution=merge-duplicates,return=minimal" });
-  return { ts, size: text.length, snap: JSON.stringify(data) };
+  return { ts, size: text.length, snap: JSON.stringify(data), hash: hash(JSON.stringify(data)) };
 }
 
 export function applyEnvelope(env, keys) {
+  restoring = true;
   keys.forEach((k) => {
     const v = env.data[k];
     try { if (typeof v === "string") localStorage.setItem(k, v); else localStorage.removeItem(k); } catch { /* ignore */ }

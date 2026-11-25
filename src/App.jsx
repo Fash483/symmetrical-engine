@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import RenamePanel from "./RenamePanel.jsx";
 import FolderTreePanel from "./FolderTreePanel.jsx";
 import CloudPanel from "./CloudPanel.jsx";
+import { isRestoring } from "./lib/cloud.js";
 
 const LS = "b2grab_v2";
 const nat = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
@@ -232,7 +233,7 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [collapsed, setCollapsed] = useState(() => new Set());
   const set = (p) => setS((o) => ({ ...o, ...p }));
-  useEffect(() => { try { localStorage.setItem(LS, JSON.stringify(s)); } catch { /* ignore */ } }, [s]);
+  useEffect(() => { if (isRestoring()) return; try { localStorage.setItem(LS, JSON.stringify(s)); } catch { /* ignore */ } }, [s]);
 
   // Receive items from the userscript: URL hash (#b2=...) or window.postMessage
   useEffect(() => {
