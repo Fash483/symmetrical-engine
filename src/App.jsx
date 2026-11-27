@@ -394,7 +394,7 @@ export default function App() {
     code = code.replace('LOCAL_DIR = "/kaggle/working/"', 'LOCAL_DIR = "/content/grab_builder_tmp/"');
     code = code.replace('CREDS_FILE = "/kaggle/working/azure_conn.txt"', 'CREDS_FILE = "/content/azure_conn.txt"')
       .replace('CREDS_FILE = "/kaggle/working/b2_creds.txt"', 'CREDS_FILE = "/content/b2_creds.txt"');
-    const setup = "# Google Colab: mount Drive\nfrom google.colab import drive\ndrive.mount('/content/drive')\nimport os, sys, subprocess, shutil\nsubprocess.run([sys.executable, '-m', 'pip', '-q', 'install', 'boto3'], check=True)\nLOCAL_FINAL_DIR = '/content/drive/MyDrive'\nLOCAL_DIR = '/content/grab_builder_tmp/'\nshutil.rmtree(LOCAL_DIR, ignore_errors=True)\nos.makedirs(LOCAL_DIR, exist_ok=True)\n\n";
+    const setup = "import os, sys, subprocess, shutil\nsubprocess.run([sys.executable, '-m', 'pip', '-q', 'install', 'boto3'], check=True)\nLOCAL_FINAL_DIR = '/content/drive/MyDrive'\nLOCAL_DIR = '/content/grab_builder_tmp/'\nshutil.rmtree(LOCAL_DIR, ignore_errors=True)\nos.makedirs(LOCAL_DIR, exist_ok=True)\n\n";
     const finish = "\n# Move completed downloads from temporary storage into the Drive root\nfor root, dirs, files in os.walk(LOCAL_DIR):\n    rel = os.path.relpath(root, LOCAL_DIR)\n    dest_root = LOCAL_FINAL_DIR if rel == '.' else os.path.join(LOCAL_FINAL_DIR, rel)\n    os.makedirs(dest_root, exist_ok=True)\n    for filename in files:\n        shutil.move(os.path.join(root, filename), os.path.join(dest_root, filename))\nshutil.rmtree(LOCAL_DIR, ignore_errors=True)\nprint('Saved completed files to', LOCAL_FINAL_DIR)\n";
     return setup + code + finish;
   }
