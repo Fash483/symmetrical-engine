@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import RenamePanel from "./RenamePanel.jsx";
 import FolderTreePanel from "./FolderTreePanel.jsx";
+import MediaPanel from "./MediaPanel.jsx";
+import { CF_DEFAULT, toColab, normCfDir } from "./lib/colab.js";
+import { MEDIA_DEF, mediaPy, mediaListHead, listLine, mdClamp, mdValidDt } from "./lib/media.js";
 import CloudPanel from "./CloudPanel.jsx";
-import MediaTools from "./MediaTools.jsx";
 import { isRestoring } from "./lib/cloud.js";
 
 const LS = "b2grab_v2";
@@ -24,7 +26,14 @@ const parseKw = (s) => s.split(/[,\n]+|\s+/).map((x) => x.trim().toLowerCase()).
 const carry = (r) => ({
   ...(typeof r.newName === "string" && r.newName ? { nn: r.newName } : {}),
   ...(typeof r.folder === "string" && r.folder ? { folder: r.folder, forced: !!r.forced } : {}),
+  ...(r.ff && typeof r.ff === "object" ? { ff: r.ff } : {}),
+  ...(r.dt ? { dt: true } : {}),
 });
+// global ffmpeg / date options sent by the userscript (a trailing { mediaPlan } element)
+const mediaFrom = (o, list) => {
+  const p = (list.find((r) => r && r.mediaPlan) || {}).mediaPlan;
+  return p && typeof p === "object" ? { media: { ...MEDIA_DEF, ...o.media, ffOn: !!p.ffOn, db: mdClamp(p.db, 12), del: !!p.del, dateOn: !!p.dateOn, datetime: mdValidDt(p.datetime) ? p.datetime : "" } } : {};
+};
 const normDir = (d) => { const p = d.split("/").map((x) => x.trim()).filter(Boolean); return "/" + p.join("/") + (p.length ? "/" : ""); };
 
 // "copied" is a bitmask: 1 = part 1 copied, 2 = part 2 copied. A full/Colab copy sets both (3).
@@ -70,6 +79,8 @@ FILE_KEYWORDS = @KW@
 RENAMES = @RENAMES@
 FOLDERS = @FOLDERS@
 
+@MEDIA@
+
 def resolve_dir(folder):
     f = folder.replace(chr(92), "/").rstrip("/")
     if any(c in f for c in "*?["):
@@ -110,6 +121,7 @@ def collect(item, out):
 
 def download(key, size, item):
     lp = target(key, item)
+    DL[lp] = item
     os.makedirs(os.path.dirname(lp), exist_ok=True)  # create the folder if it is missing
     if os.path.exists(lp) and os.path.getsize(lp) == size:
         print("Skip (exists):", lp)
@@ -131,6 +143,7 @@ def main():
 
     for k in files:
         download(k, *found[k])
+    post_process()
     print("Download complete.")
 
 if __name__ == "__main__":
@@ -142,8 +155,6 @@ const AUTH_KAGGLE = `from kaggle_secrets import UserSecretsClient
 s = UserSecretsClient()
 B2_KEY_ID = s.get_secret("B2_KEY_ID")
 B2_APPLICATION_KEY = s.get_secret("B2_APPLICATION_KEY")`;
-
-const AUTH_INLINE = `B2_KEY_ID = "PASTE_B2_KEY_ID_HERE"\nB2_APPLICATION_KEY = "PASTE_B2_APPLICATION_KEY_HERE"`;
 
 // Downloads a txt (line 1 = key id, line 2 = application key), reads it, then deletes it.
 const AUTH_URL = `import re
@@ -185,8 +196,10 @@ const DEF_CREDS_URL = "https://tfnqdcsnbmpckvjkitqs.supabase.co/functions/v1/dow
 const DEF = {
   auth: "kaggle", credsUrl: DEF_CREDS_URL,
   bucket: "Arielleb", region: "us-east-005", prefix: "", dir: "/", kw: "", mode: "all", fileKw: "",
-  group: "season", sort: "name", split: false, colab: false, colabAuth: "inline", folders: true, paste: "", media: { setDate: false, datetime: "", ffmpeg: false, boostDb: 0, muxSubtitles: true }, items: [],
+  group: "season", sort: "name", split: false, colab: false, folders: true, paste: "", items: [],
   hideCopied: false,
+  media: MEDIA_DEF,
+  cdirs: [], cdir: CF_DEFAULT,
 };
 
 const CSS = `
@@ -234,6 +247,7 @@ export default function App() {
   const [s, setS] = useState(() => { try { return { ...DEF, ...JSON.parse(localStorage.getItem(LS)) }; } catch { return DEF; } });
   const [copied, setCopied] = useState("");
   const [notice, setNotice] = useState("");
+  const [cfNew, setCfNew] = useState("");
   const [collapsed, setCollapsed] = useState(() => new Set());
   const set = (p) => setS((o) => ({ ...o, ...p }));
   useEffect(() => { if (isRestoring()) return; try { localStorage.setItem(LS, JSON.stringify(s)); } catch { /* ignore */ } }, [s]);
@@ -253,7 +267,7 @@ export default function App() {
           const it = { name: r.name, dir, isDir: !!r.isDir, checked: !!r.checked, idx: seq++, date, cp: 0, ...carry(r) };
           idx.set(k, it); next.push(it);
         });
-        return { ...o, items: next };
+        return { ...o, ...mediaFrom(o, list), items: next };
       });
       setNotice(`Received ${list.length} item(s) from the userscript`);
     };
@@ -363,51 +377,44 @@ export default function App() {
   const applyPlan = (p) => setItems((a) => a.map((x) => { const e = p.assignments[keyOf(x)]; return e ? { ...x, folder: e.folder || undefined, forced: e.folder && e.forced ? true : undefined } : x; }));
 
 
-  function buildMediaPostprocess(media, keys) {
-    const m = media || {};
-    if (!m.ffmpeg && !(m.setDate && m.datetime)) return "\n";
-    const mediaNames = JSON.stringify(keys);
-    const dateLine = m.setDate && m.datetime ? `STAMP = ${JSON.stringify(m.datetime.replace("T", " ") + ":00")}` : `STAMP = ""`;
-    return `\n\n# ---- Link Nest media tools ----\nimport subprocess, shutil, datetime\nMEDIA_ITEMS = ${mediaNames}\n${dateLine}\nBOOST_DB = ${Number(m.boostDb || 0)}\nMUX_SUBTITLES = ${!!m.muxSubtitles}\nVIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpeg", ".mpg")\nSUB_EXTS = (".srt", ".ass", ".ssa", ".vtt")\ndef postprocess_media():\n    if ${!!m.ffmpeg}:\n        if not shutil.which("ffmpeg"):\n            subprocess.run(["bash", "-lc", "apt-get -qq update && apt-get -qq install -y ffmpeg"], check=True)\n        for root, _, names in os.walk(LOCAL_DIR):\n            for name in names:\n                src = os.path.join(root, name)\n                stem, ext = os.path.splitext(name)\n                if ext.lower() not in VIDEO_EXTS: continue\n                sub = next((os.path.join(root, stem + x) for x in SUB_EXTS if os.path.isfile(os.path.join(root, stem + x))), "") if MUX_SUBTITLES else ""\n                if not sub and not BOOST_DB: continue\n                out = os.path.join(root, stem + ".mkv") if sub else src\n                cmd = ["ffmpeg", "-nostdin", "-y", "-i", src]\n                if sub: cmd += ["-i", sub, "-map", "0", "-map", "1", "-c:v", "copy", "-c:s", "srt" if sub.lower().endswith((".srt", ".vtt")) else "ass"]\n                else: cmd += ["-map", "0", "-c:v", "copy"]\n                if BOOST_DB: cmd += ["-af", f"volume={BOOST_DB}dB", "-c:a", "aac", "-b:a", "192k"]\n                else: cmd += ["-c:a", "copy"]\n                before = os.stat(src).st_mtime\n                tmp = out + ".ffmpeg-tmp" + os.path.splitext(out)[1]\n                cmd += [tmp]\n                subprocess.run(cmd, check=True)\n                os.utime(tmp, (before, before)); os.replace(tmp, out)\n                \n    if STAMP:\n        dt = datetime.datetime.strptime(STAMP, "%Y-%m-%d %H:%M:%S").timestamp()\n        for root, _, names in os.walk(LOCAL_DIR):\n            for name in names:\n                p = os.path.join(root, name); os.utime(p, (dt, dt))\n    print("Media processing complete")\n\npostprocess_media()\n`;
-  }
+  const cfDirs = [CF_DEFAULT, ...(s.cdirs || [])];
+  const addCf = () => { const d = normCfDir(cfNew); if (!d) return; set({ cdirs: d === CF_DEFAULT || (s.cdirs || []).includes(d) ? s.cdirs || [] : [...(s.cdirs || []), d], cdir: d }); setCfNew(""); };
+  const delCf = () => { if ((s.cdir || CF_DEFAULT) !== CF_DEFAULT) set({ cdirs: (s.cdirs || []).filter((d) => d !== s.cdir), cdir: CF_DEFAULT }); };
+  const media = { ...MEDIA_DEF, ...s.media };
+  const setMedia = (p) => setS((o) => ({ ...o, media: { ...MEDIA_DEF, ...o.media, ...p } }));
+  const editItems = (list, fn) => { const st = new Set(list); setItems((a) => a.map((x) => (st.has(x) ? { ...x, ...fn(x) } : x))); };
 
-  function buildPython(part, colab = false) {
+  function buildPython(part) {
+    const code = buildPythonRaw(s.colab ? 0 : part);
+    return s.colab ? toColab(code, s.cdir || CF_DEFAULT) : code;
+  }
+  function buildPythonRaw(part) {
     const header = part
       ? `PART ${part} of 2 - splits the FILES inside ${keys.length} selected item(s)`
       : `FULL RUN, no split (${keys.length} selected item(s))`;
     const names = base.map((i) => "# - " + i.name).join("\n");
     return TPL
       .replace("@HEADER@", () => header + "\n" + names)
-      .replace("@AUTH@", () => (colab ? (s.colabAuth === "url" ? AUTH_URL.replace("@CREDS_URL@", () => JSON.stringify(s.credsUrl.trim())) : AUTH_INLINE) : (s.auth === "url" ? AUTH_URL.replace("@CREDS_URL@", () => JSON.stringify(s.credsUrl.trim())) : AUTH_KAGGLE)))
+      .replace("@AUTH@", () => (s.auth === "url" ? AUTH_URL.replace("@CREDS_URL@", () => JSON.stringify(s.credsUrl.trim())) : AUTH_KAGGLE))
       .replace("@PART@", () => String(part || 0))
       .replace("@REGION@", () => s.region)
       .replace("@BUCKET@", () => s.bucket)
       .replace("@ITEMS@", () => JSON.stringify(keys, null, 4))
+      .replace("@MEDIA@", () => mediaPy(base, keyOf, media))
       .replace("@RENAMES@", () => JSON.stringify(renameMap, null, 4))
       .replace("@FOLDERS@", () => JSON.stringify(folderMap, null, 4))
-      .replace("@KW@", () => JSON.stringify(parseKw(s.fileKw))) + buildMediaPostprocess(s.media, keys);
+      .replace("@KW@", () => JSON.stringify(parseKw(s.fileKw)));
   }
-  function buildColabPython() {
-    // Always download into ephemeral local storage first. If media tools are active,
-    // processing completes there before the finished files are moved into Drive.
-    let code = buildPython(0, true);
-    code = code.replace('LOCAL_DIR = "/kaggle/working/"', 'LOCAL_DIR = "/content/grab_builder_tmp/"');
-    code = code.replace('CREDS_FILE = "/kaggle/working/azure_conn.txt"', 'CREDS_FILE = "/content/azure_conn.txt"')
-      .replace('CREDS_FILE = "/kaggle/working/b2_creds.txt"', 'CREDS_FILE = "/content/b2_creds.txt"');
-    const setup = "import os, sys, subprocess, shutil\nsubprocess.run([sys.executable, '-m', 'pip', '-q', 'install', 'boto3'], check=True)\nLOCAL_FINAL_DIR = '/content/drive/MyDrive'\nLOCAL_DIR = '/content/grab_builder_tmp/'\nshutil.rmtree(LOCAL_DIR, ignore_errors=True)\nos.makedirs(LOCAL_DIR, exist_ok=True)\n\n";
-    const finish = "\n# Move completed downloads from temporary storage into the Drive root\nfor root, dirs, files in os.walk(LOCAL_DIR):\n    rel = os.path.relpath(root, LOCAL_DIR)\n    dest_root = LOCAL_FINAL_DIR if rel == '.' else os.path.join(LOCAL_FINAL_DIR, rel)\n    os.makedirs(dest_root, exist_ok=True)\n    for filename in files:\n        shutil.move(os.path.join(root, filename), os.path.join(dest_root, filename))\nshutil.rmtree(LOCAL_DIR, ignore_errors=True)\nprint('Saved completed files to', LOCAL_FINAL_DIR)\n";
-    return setup + code + finish;
-  }
-
   function buildList() {
-    return ["# " + base.length + " item(s)", ...base.map((i) => "# - " + i.name), ...base.map((i) => i.name + " | " + i.dir + (i.nn || i.folder ? " | " + (i.nn || "") + " | " + (i.folder || "") : ""))].join("\n");
+    const m = mediaListHead(base, keyOf, media);
+    return ["# " + base.length + " item(s)", ...m.head, ...base.map((i) => "# - " + i.name), ...base.map((i) => listLine(i, m.plan, keyOf))].join("\n");
   }
 
   const toggle = (it, v) => setItems((a) => a.map((x) => (x === it ? { ...x, checked: v } : x)));
   const toggleGroup = (g, v) => setItems((a) => a.map((x) => (g.items.includes(x) ? { ...x, checked: v } : x)));
 
   async function copy(part, id) {
-    const code = s.colab ? buildColabPython() : buildPython(part);
+    const code = buildPython(part);
     const bit = s.colab || !part ? 3 : part; // full / Colab copy = both halves
     const done = new Set(base);
     try { await navigator.clipboard.writeText(code); } catch { /* ignore */ }
@@ -417,7 +424,7 @@ export default function App() {
   }
 
   const here = s.items.filter((i) => i.dir === normDir(s.dir)).length;
-  const mode = s.colab ? ` → Colab Drive script of ${base.length} item(s)`
+  const mode = s.colab ? ` → Colab script of ${base.length} item(s) → ${s.cdir || CF_DEFAULT}`
     : s.split ? " → split by FILE: Part 1 = first half, Part 2 = second half"
     : ` → ${base.length} item(s) in script`;
   const info = `${s.items.length} stored (${here} here) · ${visible.length} match · ${ticked.length || "none"} ticked${mode}${ticked.length ? "" : " (nothing ticked = all matches)"} · ${copiedCount} copied${s.hideCopied ? " (hidden)" : ""} · dir ${normDir(s.dir)}`;
@@ -425,7 +432,7 @@ export default function App() {
   const renderItem = (i, sub) => (
     <label className={(sub ? "sub" : "") + (isCopied(i) ? " done" : "")} key={i.dir + i.name}>
       <input type="checkbox" checked={i.checked} onChange={(e) => toggle(i, e.target.checked)} />
-      <span>{isCopied(i) ? "✔ " : ""}{i.isDir ? "📁 " : "🎞 "}{i.name}{i.nn && <small style={{ display: "block", fontWeight: 700 }}>→ {i.nn}</small>}{i.folder && <small style={{ display: "block", opacity: 0.8 }}>📂 {i.folder}</small>}{multiDir && <small style={{ display: "block", opacity: 0.65 }}>{i.dir}</small>}{isDateSort && i.date && <small style={{ display: "block", opacity: 0.65 }}>{i.date}</small>}</span>
+      <span>{isCopied(i) ? "✔ " : ""}{i.isDir ? "📁 " : "🎞 "}{i.name}{i.nn && <small style={{ display: "block", fontWeight: 700 }}>→ {i.nn}</small>}{i.folder && <small style={{ display: "block", opacity: 0.8 }}>📂 {i.folder}</small>}{((i.ff && i.ff.on) || i.dt) && <small style={{ display: "block", opacity: 0.8 }}>{(i.ff && i.ff.on) ? `🎬 ffmpeg${i.ff.boost ? ` +${i.ff.db}dB` : ""} ` : ""}{i.dt ? "🕒 date" : ""}</small>}{multiDir && <small style={{ display: "block", opacity: 0.65 }}>{i.dir}</small>}{isDateSort && i.date && <small style={{ display: "block", opacity: 0.65 }}>{i.date}</small>}</span>
     </label>
   );
 
@@ -438,7 +445,6 @@ export default function App() {
         {notice && <div id="fgb-notice">✔ {notice}</div>}
 
         <CloudPanel appId="b2-web" keys={["b2grab_v2", "b2grab_rename", "b2grab_tree"]} rev={s} />
-        <MediaTools value={s.media} onChange={(media) => set({ media })} />
 
         <details className="box">
           <summary>＋ Add items (paste)</summary>
@@ -471,32 +477,39 @@ export default function App() {
         </label>
         <label className="chkrow">
           <input type="checkbox" checked={s.colab} onChange={(e) => set({ colab: e.target.checked })} />
-          <span>Colab mode (Google Drive downloader script)</span>
-          </label>
-          {s.colab && <div className="row">
-            <select value={s.colabAuth} onChange={(e) => set({ colabAuth: e.target.value })}>
-              <option value="inline">Hardcoded credentials in script</option><option value="url">Download creds.txt then delete it</option>
+          <span>Colab mode (script saves to Drive)</span>
+        </label>
+        {s.colab && (
+          <details className="box" open>
+            <summary>Colab: save to</summary>
+            <select value={cfDirs.includes(s.cdir) ? s.cdir : CF_DEFAULT} onChange={(e) => set({ cdir: e.target.value })}>
+              {cfDirs.map((d) => <option key={d} value={d}>{d === CF_DEFAULT ? d + " (default)" : d}</option>)}
             </select>
-            {s.colabAuth === "url" && <input value={s.credsUrl} onChange={(e) => set({ credsUrl: e.target.value })} placeholder="Colab creds.txt download URL (not a search keyword)" />}
-          </div>}
-          
-        {!s.colab && <input value={s.fileKw} onChange={(e) => set({ fileKw: e.target.value })} placeholder="Optional: filter files inside folders (S01)" />}
+            <div className="row">
+              <input value={cfNew} onChange={(e) => setCfNew(e.target.value)} placeholder="/content/Shared* or /content/drive/MyDrive/Shows/" />
+              <button type="button" style={{ flex: "0 0 auto", width: "auto" }} onClick={addCf}>Add</button>
+              <button type="button" style={{ flex: "0 0 auto", width: "auto" }} onClick={delCf}>Remove</button>
+            </div>
+            <small>Drive is already mounted in Colab, nothing to import. * ? [ match the first existing folder (e.g. /content/Shared*). Folders from the folder tree go under this one.</small>
+          </details>
+        )}
+        <input value={s.fileKw} onChange={(e) => set({ fileKw: e.target.value })} placeholder="Optional: filter files inside folders (S01)" />
         {!s.colab && (
           <label className="chkrow">
             <input type="checkbox" checked={s.split} onChange={(e) => set({ split: e.target.checked })} />
             <span>Split files into 2 halves (copy each separately)</span>
           </label>
         )}
-        {!s.colab && (
+        {(
           <select value={s.auth} onChange={(e) => set({ auth: e.target.value })}>
-            <option value="kaggle">Credentials: Kaggle secrets</option>
+            <option value="kaggle">{s.colab ? "Credentials: hardcoded (edit the placeholders)" : "Credentials: Kaggle secrets"}</option>
             <option value="url">Credentials: download txt (id + key), then delete it</option>
           </select>
         )}
-        {!s.colab && s.auth === "url" && (
+        {s.auth === "url" && (
           <input value={s.credsUrl} onChange={(e) => set({ credsUrl: e.target.value })} placeholder="URL of the credentials txt" />
         )}
-        {!s.colab && (
+        {(
           <details className="box">
             <summary>B2 settings</summary>
             <input value={s.bucket} onChange={(e) => set({ bucket: e.target.value })} placeholder="Bucket" />
@@ -533,6 +546,7 @@ export default function App() {
         </div>
         <RenamePanel links={renameLinks} renamedCount={files.filter((i) => i.nn).length} notify={setNotice} storeKey="b2grab_rename" onApply={applyRenames} onReset={resetRenames} />
         <FolderTreePanel links={treeLinks} plan={treePlan} onChange={applyPlan} notify={setNotice} storeKey="b2grab_tree" />
+        <MediaPanel items={base} keyOf={keyOf} media={media} onMedia={setMedia} edit={editItems} notify={setNotice} />
 
         <div className="row">
           {s.colab || !s.split ? (
