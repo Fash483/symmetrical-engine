@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import RenamePanel from "./RenamePanel.jsx";
 import FolderTreePanel from "./FolderTreePanel.jsx";
 import CloudPanel from "./CloudPanel.jsx";
+import MediaTools from "./MediaTools.jsx";
 import { isRestoring } from "./lib/cloud.js";
 
 const LS = "b2grab_v2";
@@ -142,6 +143,8 @@ s = UserSecretsClient()
 B2_KEY_ID = s.get_secret("B2_KEY_ID")
 B2_APPLICATION_KEY = s.get_secret("B2_APPLICATION_KEY")`;
 
+const AUTH_INLINE = `B2_KEY_ID = "PASTE_B2_KEY_ID_HERE"\nB2_APPLICATION_KEY = "PASTE_B2_APPLICATION_KEY_HERE"`;
+
 // Downloads a txt (line 1 = key id, line 2 = application key), reads it, then deletes it.
 const AUTH_URL = `import re
 import urllib.request
@@ -182,7 +185,7 @@ const DEF_CREDS_URL = "https://tfnqdcsnbmpckvjkitqs.supabase.co/functions/v1/dow
 const DEF = {
   auth: "kaggle", credsUrl: DEF_CREDS_URL,
   bucket: "Arielleb", region: "us-east-005", prefix: "", dir: "/", kw: "", mode: "all", fileKw: "",
-  group: "season", sort: "name", split: false, colab: false, folders: true, paste: "", items: [],
+  group: "season", sort: "name", split: false, colab: false, colabAuth: "inline", folders: true, paste: "", media: { setDate: false, datetime: "", ffmpeg: false, boostDb: 0, muxSubtitles: true }, items: [],
   hideCopied: false,
 };
 
@@ -360,22 +363,42 @@ export default function App() {
   const applyPlan = (p) => setItems((a) => a.map((x) => { const e = p.assignments[keyOf(x)]; return e ? { ...x, folder: e.folder || undefined, forced: e.folder && e.forced ? true : undefined } : x; }));
 
 
-  function buildPython(part) {
+  function buildMediaPostprocess(media, keys) {
+    const m = media || {};
+    if (!m.ffmpeg && !(m.setDate && m.datetime)) return "\n";
+    const mediaNames = JSON.stringify(keys);
+    const dateLine = m.setDate && m.datetime ? `STAMP = ${JSON.stringify(m.datetime.replace("T", " ") + ":00")}` : `STAMP = ""`;
+    return `\n\n# ---- Link Nest media tools ----\nimport subprocess, shutil, datetime\nMEDIA_ITEMS = ${mediaNames}\n${dateLine}\nBOOST_DB = ${Number(m.boostDb || 0)}\nMUX_SUBTITLES = ${!!m.muxSubtitles}\nVIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpeg", ".mpg")\nSUB_EXTS = (".srt", ".ass", ".ssa", ".vtt")\ndef postprocess_media():\n    if ${!!m.ffmpeg}:\n        if not shutil.which("ffmpeg"):\n            subprocess.run(["bash", "-lc", "apt-get -qq update && apt-get -qq install -y ffmpeg"], check=True)\n        for root, _, names in os.walk(LOCAL_DIR):\n            for name in names:\n                src = os.path.join(root, name)\n                stem, ext = os.path.splitext(name)\n                if ext.lower() not in VIDEO_EXTS: continue\n                sub = next((os.path.join(root, stem + x) for x in SUB_EXTS if os.path.isfile(os.path.join(root, stem + x))), "") if MUX_SUBTITLES else ""\n                if not sub and not BOOST_DB: continue\n                out = os.path.join(root, stem + ".mkv") if sub else src\n                cmd = ["ffmpeg", "-nostdin", "-y", "-i", src]\n                if sub: cmd += ["-i", sub, "-map", "0", "-map", "1", "-c:v", "copy", "-c:s", "srt" if sub.lower().endswith((".srt", ".vtt")) else "ass"]\n                else: cmd += ["-map", "0", "-c:v", "copy"]\n                if BOOST_DB: cmd += ["-af", f"volume={BOOST_DB}dB", "-c:a", "aac", "-b:a", "192k"]\n                else: cmd += ["-c:a", "copy"]\n                before = os.stat(src).st_mtime\n                tmp = out + ".ffmpeg-tmp" + os.path.splitext(out)[1]\n                cmd += [tmp]\n                subprocess.run(cmd, check=True)\n                os.utime(tmp, (before, before)); os.replace(tmp, out)\n                \n    if STAMP:\n        dt = datetime.datetime.strptime(STAMP, "%Y-%m-%d %H:%M:%S").timestamp()\n        for root, _, names in os.walk(LOCAL_DIR):\n            for name in names:\n                p = os.path.join(root, name); os.utime(p, (dt, dt))\n    print("Media processing complete")\n\npostprocess_media()\n`;
+  }
+
+  function buildPython(part, colab = false) {
     const header = part
       ? `PART ${part} of 2 - splits the FILES inside ${keys.length} selected item(s)`
       : `FULL RUN, no split (${keys.length} selected item(s))`;
     const names = base.map((i) => "# - " + i.name).join("\n");
     return TPL
       .replace("@HEADER@", () => header + "\n" + names)
-      .replace("@AUTH@", () => (s.auth === "url" ? AUTH_URL.replace("@CREDS_URL@", () => JSON.stringify(s.credsUrl.trim())) : AUTH_KAGGLE))
+      .replace("@AUTH@", () => (colab ? (s.colabAuth === "url" ? AUTH_URL.replace("@CREDS_URL@", () => JSON.stringify(s.credsUrl.trim())) : AUTH_INLINE) : (s.auth === "url" ? AUTH_URL.replace("@CREDS_URL@", () => JSON.stringify(s.credsUrl.trim())) : AUTH_KAGGLE)))
       .replace("@PART@", () => String(part || 0))
       .replace("@REGION@", () => s.region)
       .replace("@BUCKET@", () => s.bucket)
       .replace("@ITEMS@", () => JSON.stringify(keys, null, 4))
       .replace("@RENAMES@", () => JSON.stringify(renameMap, null, 4))
       .replace("@FOLDERS@", () => JSON.stringify(folderMap, null, 4))
-      .replace("@KW@", () => JSON.stringify(parseKw(s.fileKw)));
+      .replace("@KW@", () => JSON.stringify(parseKw(s.fileKw))) + buildMediaPostprocess(s.media, keys);
   }
+  function buildColabPython() {
+    // Always download into ephemeral local storage first. If media tools are active,
+    // processing completes there before the finished files are moved into Drive.
+    let code = buildPython(0, true);
+    code = code.replace('LOCAL_DIR = "/kaggle/working/"', 'LOCAL_DIR = "/content/grab_builder_tmp/"');
+    code = code.replace('CREDS_FILE = "/kaggle/working/azure_conn.txt"', 'CREDS_FILE = "/content/azure_conn.txt"')
+      .replace('CREDS_FILE = "/kaggle/working/b2_creds.txt"', 'CREDS_FILE = "/content/b2_creds.txt"');
+    const setup = "# Google Colab: mount Drive\nfrom google.colab import drive\ndrive.mount('/content/drive')\nimport os, sys, subprocess, shutil\nsubprocess.run([sys.executable, '-m', 'pip', '-q', 'install', 'boto3'], check=True)\nLOCAL_FINAL_DIR = '/content/drive/MyDrive'\nLOCAL_DIR = '/content/grab_builder_tmp/'\nshutil.rmtree(LOCAL_DIR, ignore_errors=True)\nos.makedirs(LOCAL_DIR, exist_ok=True)\n\n";
+    const finish = "\n# Move completed downloads from temporary storage into the Drive root\nfor root, dirs, files in os.walk(LOCAL_DIR):\n    rel = os.path.relpath(root, LOCAL_DIR)\n    dest_root = LOCAL_FINAL_DIR if rel == '.' else os.path.join(LOCAL_FINAL_DIR, rel)\n    os.makedirs(dest_root, exist_ok=True)\n    for filename in files:\n        shutil.move(os.path.join(root, filename), os.path.join(dest_root, filename))\nshutil.rmtree(LOCAL_DIR, ignore_errors=True)\nprint('Saved completed files to', LOCAL_FINAL_DIR)\n";
+    return setup + code + finish;
+  }
+
   function buildList() {
     return ["# " + base.length + " item(s)", ...base.map((i) => "# - " + i.name), ...base.map((i) => i.name + " | " + i.dir + (i.nn || i.folder ? " | " + (i.nn || "") + " | " + (i.folder || "") : ""))].join("\n");
   }
@@ -384,7 +407,7 @@ export default function App() {
   const toggleGroup = (g, v) => setItems((a) => a.map((x) => (g.items.includes(x) ? { ...x, checked: v } : x)));
 
   async function copy(part, id) {
-    const code = s.colab ? buildList() : buildPython(part);
+    const code = s.colab ? buildColabPython() : buildPython(part);
     const bit = s.colab || !part ? 3 : part; // full / Colab copy = both halves
     const done = new Set(base);
     try { await navigator.clipboard.writeText(code); } catch { /* ignore */ }
@@ -394,7 +417,7 @@ export default function App() {
   }
 
   const here = s.items.filter((i) => i.dir === normDir(s.dir)).length;
-  const mode = s.colab ? ` → Colab list of ${base.length} item(s)`
+  const mode = s.colab ? ` → Colab Drive script of ${base.length} item(s)`
     : s.split ? " → split by FILE: Part 1 = first half, Part 2 = second half"
     : ` → ${base.length} item(s) in script`;
   const info = `${s.items.length} stored (${here} here) · ${visible.length} match · ${ticked.length || "none"} ticked${mode}${ticked.length ? "" : " (nothing ticked = all matches)"} · ${copiedCount} copied${s.hideCopied ? " (hidden)" : ""} · dir ${normDir(s.dir)}`;
@@ -415,6 +438,7 @@ export default function App() {
         {notice && <div id="fgb-notice">✔ {notice}</div>}
 
         <CloudPanel appId="b2-web" keys={["b2grab_v2", "b2grab_rename", "b2grab_tree"]} rev={s} />
+        <MediaTools value={s.media} onChange={(media) => set({ media })} />
 
         <details className="box">
           <summary>＋ Add items (paste)</summary>
@@ -447,8 +471,15 @@ export default function App() {
         </label>
         <label className="chkrow">
           <input type="checkbox" checked={s.colab} onChange={(e) => set({ colab: e.target.checked })} />
-          <span>Colab mode (name | directory list)</span>
-        </label>
+          <span>Colab mode (Google Drive downloader script)</span>
+          </label>
+          {s.colab && <div className="row">
+            <select value={s.colabAuth} onChange={(e) => set({ colabAuth: e.target.value })}>
+              <option value="inline">Hardcoded credentials in script</option><option value="url">Download creds.txt then delete it</option>
+            </select>
+            {s.colabAuth === "url" && <input value={s.credsUrl} onChange={(e) => set({ credsUrl: e.target.value })} placeholder="Colab creds.txt download URL (not a search keyword)" />}
+          </div>}
+          
         {!s.colab && <input value={s.fileKw} onChange={(e) => set({ fileKw: e.target.value })} placeholder="Optional: filter files inside folders (S01)" />}
         {!s.colab && (
           <label className="chkrow">
@@ -505,7 +536,7 @@ export default function App() {
 
         <div className="row">
           {s.colab || !s.split ? (
-            <button className="go" onClick={() => copy(0, "all")}>{copied === "all" ? "✔ Copied!" : s.colab ? "Copy list" : "Copy script"}</button>
+            <button className="go" onClick={() => copy(0, "all")}>{copied === "all" ? "✔ Copied!" : s.colab ? "Copy Colab script" : "Copy script"}</button>
           ) : (
             <>
               <button className="go" onClick={() => copy(1, "p1")}>{copied === "p1" ? "✔ Copied!" : "Copy part 1"}</button>
